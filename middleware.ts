@@ -1,40 +1,37 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { createHmac, timingSafeEqual } from 'crypto';
 
-const SESSION_SECRET = process.env.SESSION_SECRET || process.env.ADMIN_PASSWORD || 'dev-secret';
 const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout'];
 
-function verifyToken(token: string): { username: string; role: string } | null {
+async function hmacSign(payload: string, secret: string): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(payload));
+  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function verifyToken(token: string): Promise<{ username: string; role: string } | null> {
+  const secret = process.env.SESSION_SECRET || process.env.ADMIN_PASSWORD || 'dev-secret';
   const parts = token.split(':');
-  const sign = (p: string) => createHmac('sha256', SESSION_SECRET).update(p).digest('hex');
 
   if (parts.length === 3) {
     const [username, expiryStr, sig] = parts;
-    const payload = `${username}:${expiryStr}`;
-    const expected = sign(payload);
-    const sigBuf = Buffer.from(sig, 'utf8');
-    const expBuf = Buffer.from(expected, 'utf8');
-    if (sigBuf.length !== expBuf.length) return null;
-    if (!timingSafeEqual(sigBuf, expBuf)) return null;
+    const expected = await hmacSign(`${username}:${expiryStr}`, secret);
+    if (sig !== expected) return null;
     if (Date.now() > Number(expiryStr)) return null;
     return { username, role: 'admin' };
   }
   if (parts.length === 4) {
     const [username, role, expiryStr, sig] = parts;
-    const payload = `${username}:${role}:${expiryStr}`;
-    const expected = sign(payload);
-    const sigBuf = Buffer.from(sig, 'utf8');
-    const expBuf = Buffer.from(expected, 'utf8');
-    if (sigBuf.length !== expBuf.length) return null;
-    if (!timingSafeEqual(sigBuf, expBuf)) return null;
+    const expected = await hmacSign(`${username}:${role}:${expiryStr}`, secret);
+    if (sig !== expected) return null;
     if (Date.now() > Number(expiryStr)) return null;
     return { username, role };
   }
   return null;
 }
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (PUBLIC_PATHS.some(p => pathname.startsWith(p))) return NextResponse.next();
@@ -48,7 +45,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 
-  const user = verifyToken(session);
+  const user = await verifyToken(session);
   if (!user) {
     if (pathname.startsWith('/api/')) {
       return NextResponse.json({ error: 'Invalid session' }, { status: 401 });
@@ -58,12 +55,10 @@ export function middleware(request: NextRequest) {
 
   // Role-based access control
   if (user.role === 'partner') {
-    // Partners can only access /partner/* and /api/partner/*
     if (!pathname.startsWith('/partner') && !pathname.startsWith('/api/partner') && !pathname.startsWith('/api/auth')) {
       if (pathname.startsWith('/api/')) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }
-      // Redirect partner to their dashboard
       return NextResponse.redirect(new URL(`/partner/${user.username}`, request.url));
     }
   }
