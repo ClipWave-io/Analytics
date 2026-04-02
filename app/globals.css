@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-bg: #050510;
+  --color-bg-surface: rgba(255, 255, 255, 0.04);
+  --color-bg-surface-hover: rgba(255, 255, 255, 0.07);
+  --color-text-primary: #ededf0;
+  --color-text-secondary: #9b9bb0;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-accent: #3388ff;
+  --color-accent-light: #60a5fa;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-card: rgba(255, 255, 255, 0.03);
+  --color-card-hover: rgba(255, 255, 255, 0.06);
+  --color-sidebar: rgba(5, 5, 16, 0.95);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+/* Card style */
+.card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  padding: 24px;
+  transition: background 0.15s;
+}
+.card:hover {
+  background: var(--color-card-hover);
+}
+
+/* KPI Card */
+.kpi-card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  padding: 20px 24px;
+}
+
+/* Recharts overrides */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: rgba(255,255,255,0.05);
+}
+.recharts-text { fill: #9b9bb0; font-size: 11px; }
+.recharts-tooltip-wrapper { outline: none; }
+
+/* Pulse animation for live indicator */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+/* Responsive table */
+.table-container {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
