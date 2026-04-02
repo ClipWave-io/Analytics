@@ -145,6 +145,39 @@ export default function PartnerGilamPage() {
               </div>
             )}
 
+            {/* Visitor Log */}
+            {data.visitors?.length > 0 && (
+              <div className="bg-[#0a0a1a] rounded-2xl border border-white/[0.06] p-6 mb-8">
+                <h3 className="text-sm font-semibold mb-4">Unique Visitor Log</h3>
+                <div className="max-h-[400px] overflow-y-auto rounded-xl">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-[#0a0a1a]">
+                      <tr className="text-[#9b9bb0] border-b border-white/[0.06]">
+                        <th className="text-left py-2 px-3 font-medium">Date</th>
+                        <th className="text-left py-2 px-3 font-medium">IP</th>
+                        <th className="text-left py-2 px-3 font-medium">Country</th>
+                        <th className="text-left py-2 px-3 font-medium">Source</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.visitors.map((v: any, i: number) => (
+                        <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
+                          <td className="py-2 px-3 text-[#9b9bb0]">{v.visited_at?.slice(0, 16).replace('T', ' ')}</td>
+                          <td className="py-2 px-3 font-mono">{v.ip}</td>
+                          <td className="py-2 px-3">{v.country}</td>
+                          <td className="py-2 px-3">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${v.source === 'gilam' ? 'bg-[#8b5cf6]/15 text-[#a78bfa]' : 'bg-[#3388ff]/15 text-[#5ca8ff]'}`}>
+                              {v.source}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {/* Charts */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="bg-[#0a0a1a] rounded-2xl border border-white/[0.06] p-6">

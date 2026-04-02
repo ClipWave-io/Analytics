@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { getSession } from '@/lib/auth';
+import { batchGeolocate } from '@/lib/geo';
 
 export async function GET(request: Request) {
   const session = await getSession();
@@ -66,6 +67,27 @@ export async function GET(request: Request) {
       `, [sources]),
     ]);
 
+    // First visit per unique IP
+    const firstVisits = await query(`
+      SELECT DISTINCT ON (ip) ip, source, created_at::TEXT as visited_at
+      FROM analytics_events
+      WHERE source = ANY($1) AND event = 'link_click' AND ip IS NOT NULL ${dateFilter}
+      ORDER BY ip, created_at ASC
+    `, [sources]);
+
+    // Geolocate IPs
+    const ips = firstVisits.rows.map((r: any) => r.ip);
+    const geoMap = await batchGeolocate(ips);
+    const visitors = firstVisits.rows
+      .map((r: any) => ({
+        ip: r.ip,
+        source: r.source,
+        visited_at: r.visited_at,
+        country: geoMap.get(r.ip)?.country || 'Unknown',
+        countryCode: geoMap.get(r.ip)?.countryCode || 'XX',
+      }))
+      .sort((a: any, b: any) => b.visited_at.localeCompare(a.visited_at));
+
     // Merge daily data
     const dayMap: Record<string, { day: string; visitors: number; gpt: number }> = {};
     for (const row of dailyVisitors.rows) {
@@ -82,6 +104,7 @@ export async function GET(request: Request) {
       gptPrefills: gptPrefills.rows[0]?.count || 0,
       byDay,
       bySource: bySource.rows,
+      visitors,
     });
   } catch (err: any) {
     console.error('[partner/analytics]', err.message);
