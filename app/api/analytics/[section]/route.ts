@@ -31,8 +31,11 @@ export async function GET(request: Request, { params }: { params: Params }) {
         return NextResponse.json(await getUsageData(from, to));
       case 'credits':
         return NextResponse.json(await getCreditsData(from, to));
-      case 'costs':
-        return NextResponse.json(await getCostsData(from, to));
+      case 'costs': {
+        const costsData = await getCostsData(from, to);
+        if (!costsData) return NextResponse.json({ error: 'FAL_KEY not configured' }, { status: 400 });
+        return NextResponse.json(costsData);
+      }
       case 'acquisition':
         return NextResponse.json(await getAcquisitionData(from, to));
       case 'live':

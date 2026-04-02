@@ -228,25 +228,90 @@ export async function getCreditsData(from: string, to: string) {
 // ═══════════════════════════════════
 
 export async function getCostsData(from: string, to: string) {
-  const [daily, byAgent, totalCost] = await Promise.all([
-    query(`
-      SELECT DATE(created_at)::TEXT as day, SUM(estimated_cost_usd)::NUMERIC(10,2) as cost
-      FROM cost_events WHERE created_at >= $1 AND created_at <= $2::date + 1
-      GROUP BY day ORDER BY day
-    `, [from, to]),
-    query(`
-      SELECT agent, COUNT(*)::INTEGER as runs, SUM(input_tokens)::INTEGER as input_tokens,
-        SUM(output_tokens)::INTEGER as output_tokens, SUM(estimated_cost_usd)::NUMERIC(10,2) as cost
-      FROM cost_events WHERE created_at >= $1 AND created_at <= $2::date + 1
-      GROUP BY agent ORDER BY cost DESC
-    `, [from, to]),
-    query(`SELECT SUM(estimated_cost_usd)::NUMERIC(10,2) as total FROM cost_events WHERE created_at >= $1 AND created_at <= $2::date + 1`, [from, to]),
-  ]);
+  const falKey = process.env.FAL_KEY;
+  if (!falKey) return null;
+
+  const headers = {
+    'Authorization': `Key ${falKey}`,
+    'Content-Type': 'application/json',
+  };
+
+  const startDate = new Date(from).toISOString();
+  const endDate = new Date(to + 'T23:59:59Z').toISOString();
+
+  // Fetch usage with daily time series and summary
+  const usageRes = await fetch('https://api.fal.ai/v1/models/usage', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      start: startDate,
+      end: endDate,
+      expand: ['time_series', 'summary'],
+      timeframe: 'day',
+      limit: 100,
+    }),
+  });
+
+  if (!usageRes.ok) {
+    const err = await usageRes.text();
+    throw new Error(`fal.ai API error: ${usageRes.status} ${err}`);
+  }
+
+  const usage = await usageRes.json();
+
+  // Also fetch current credit balance
+  const balanceRes = await fetch('https://api.fal.ai/v1/account/billing?expand=credits', { headers });
+  const balance = balanceRes.ok ? await balanceRes.json() : null;
+
+  // Process line items into daily costs and by-endpoint breakdown
+  const dailyMap: Record<string, { day: string; cost: number; requests: number }> = {};
+  const endpointMap: Record<string, { endpoint: string; requests: number; cost: number }> = {};
+
+  const items = usage.data || [];
+  for (const item of items) {
+    const cost = item.cost ?? ((item.quantity || 0) * (item.unit_price || 0));
+    const endpoint = item.endpoint_id || item.endpoint || 'unknown';
+
+    // By endpoint
+    if (!endpointMap[endpoint]) endpointMap[endpoint] = { endpoint, requests: 0, cost: 0 };
+    endpointMap[endpoint].requests += item.quantity || 1;
+    endpointMap[endpoint].cost += cost;
+  }
+
+  // Process time series if available
+  const timeSeries = usage.time_series || [];
+  for (const bucket of timeSeries) {
+    const day = (bucket.timestamp || bucket.time || '').slice(0, 10);
+    if (!day) continue;
+    if (!dailyMap[day]) dailyMap[day] = { day, cost: 0, requests: 0 };
+    dailyMap[day].cost += bucket.cost || 0;
+    dailyMap[day].requests += bucket.request_count || bucket.count || 0;
+  }
+
+  // If no time series, aggregate from items
+  if (timeSeries.length === 0) {
+    for (const item of items) {
+      const day = (item.created_at || item.timestamp || '').slice(0, 10);
+      if (!day) continue;
+      const cost = item.cost ?? ((item.quantity || 0) * (item.unit_price || 0));
+      if (!dailyMap[day]) dailyMap[day] = { day, cost: 0, requests: 0 };
+      dailyMap[day].cost += cost;
+      dailyMap[day].requests += item.quantity || 1;
+    }
+  }
+
+  const dailyCosts = Object.values(dailyMap).sort((a, b) => a.day.localeCompare(b.day));
+  const costsByEndpoint = Object.values(endpointMap).sort((a, b) => b.cost - a.cost);
+  const totalCost = usage.summary?.total_cost ?? costsByEndpoint.reduce((sum, e) => sum + e.cost, 0);
+  const totalRequests = usage.summary?.total_requests ?? costsByEndpoint.reduce((sum, e) => sum + e.requests, 0);
 
   return {
-    dailyCosts: daily.rows,
-    costsByAgent: byAgent.rows,
-    totalCost: totalCost.rows[0]?.total || 0,
+    dailyCosts,
+    costsByEndpoint,
+    totalCost,
+    totalRequests,
+    creditBalance: balance?.credits?.current_balance ?? null,
+    currency: balance?.credits?.currency || 'USD',
   };
 }
 
