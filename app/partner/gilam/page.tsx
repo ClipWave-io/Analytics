@@ -125,18 +125,17 @@ export default function PartnerGilamPage() {
                 </div>
                 <div className="space-y-3">
                   {data.bySource.map((s: any) => {
-                    const maxTotal = Math.max(...data.bySource.map((x: any) => x.total));
+                    const maxIps = Math.max(...data.bySource.map((x: any) => x.unique_ips));
                     return (
                       <div key={s.source} className="flex items-center gap-4">
                         <div className="w-32 text-sm font-medium truncate">{s.source}</div>
                         <div className="flex-1 relative h-8 bg-white/[0.03] rounded-lg overflow-hidden">
                           <div
                             className="absolute inset-y-0 left-0 rounded-lg bg-[#3388ff]/20"
-                            style={{ width: `${(s.total / maxTotal) * 100}%` }}
+                            style={{ width: `${(s.unique_ips / maxIps) * 100}%` }}
                           />
                           <div className="absolute inset-0 flex items-center px-3 text-xs">
-                            <span className="text-white font-semibold">{s.total.toLocaleString()} events</span>
-                            <span className="text-[#9b9bb0] ml-auto">{s.unique_ips.toLocaleString()} unique IPs</span>
+                            <span className="text-white font-semibold">{s.unique_ips.toLocaleString()} unique visitors</span>
                           </div>
                         </div>
                       </div>
