@@ -29,7 +29,7 @@ export default function FunnelPage() {
           {/* Main funnel */}
           <ChartCard title="Main Funnel" className="mb-8">
             <FunnelViz steps={[
-              { label: 'Page Visits', count: data.mainFunnel.visits, color: '#8b5cf6' },
+              { label: 'Dashboard Visits', count: data.mainFunnel.visits, color: '#8b5cf6' },
               { label: 'Registrations', count: data.mainFunnel.registrations, color: '#3388ff' },
               { label: 'First Video', count: data.mainFunnel.firstVideo, color: '#22c55e' },
               { label: 'Subscriptions', count: data.mainFunnel.subscriptions, color: '#f59e0b' },

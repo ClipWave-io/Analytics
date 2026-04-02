@@ -132,7 +132,7 @@ export async function getFunnelData(from: string, to: string) {
     `, [from, to]),
   ]);
 
-  const totalVisits = events.rows.find((r: any) => r.event === 'page_visit')?.count || 0;
+  const totalVisits = events.rows.find((r: any) => r.event === 'dashboard_visit')?.count || 0;
   const totalRegistrations = await query('SELECT COUNT(*)::INTEGER as count FROM users WHERE created_at >= $1 AND created_at <= $2::date + 1', [from, to]);
   const totalSubscriptions = await query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE created_at >= $1 AND created_at <= $2::date + 1 AND plan != 'free'`, [from, to]);
   const firstVideos = await query(`
