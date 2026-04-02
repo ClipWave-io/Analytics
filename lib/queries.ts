@@ -377,14 +377,36 @@ export async function getLiveData() {
 // ═══════════════════════════════════
 
 export async function getGeoData(from: string, to: string) {
-  const ips = await query(`
-    SELECT ip, COUNT(*)::INTEGER as count
-    FROM analytics_events
-    WHERE ip IS NOT NULL AND ip != '' AND created_at >= $1 AND created_at <= $2::date + 1
-    GROUP BY ip ORDER BY count DESC LIMIT 500
-  `, [from, to]);
+  const [ips, userIps, subscriberIps] = await Promise.all([
+    // Events by IP
+    query(`
+      SELECT ip, COUNT(*)::INTEGER as count
+      FROM analytics_events
+      WHERE ip IS NOT NULL AND ip != '' AND created_at >= $1 AND created_at <= $2::date + 1
+      GROUP BY ip ORDER BY count DESC LIMIT 500
+    `, [from, to]),
+    // Registered users — get their most recent IP from analytics_events
+    query(`
+      SELECT u.id, u.email, u.created_at::TEXT as registered_at, ae.ip
+      FROM users u
+      LEFT JOIN LATERAL (
+        SELECT ip FROM analytics_events WHERE user_id::TEXT = u.id::TEXT AND ip IS NOT NULL AND ip != '' ORDER BY created_at DESC LIMIT 1
+      ) ae ON TRUE
+      WHERE u.created_at >= $1 AND u.created_at <= $2::date + 1
+    `, [from, to]),
+    // Paying subscribers — get their most recent IP
+    query(`
+      SELECT u.id, u.email, s.plan, s.status, ae.ip
+      FROM subscriptions s
+      JOIN users u ON u.id = s.user_id
+      LEFT JOIN LATERAL (
+        SELECT ip FROM analytics_events WHERE user_id::TEXT = u.id::TEXT AND ip IS NOT NULL AND ip != '' ORDER BY created_at DESC LIMIT 1
+      ) ae ON TRUE
+      WHERE s.status = 'active' AND s.plan != 'free'
+    `),
+  ]);
 
-  return { ipCounts: ips.rows };
+  return { ipCounts: ips.rows, userIps: userIps.rows, subscriberIps: subscriberIps.rows };
 }
 
 // ═══════════════════════════════════

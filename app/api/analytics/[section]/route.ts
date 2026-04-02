@@ -42,18 +42,55 @@ export async function GET(request: Request, { params }: { params: Params }) {
         return NextResponse.json(await getLiveData());
       case 'geo': {
         const geoRaw = await getGeoData(from, to);
-        const geoMap = await batchGeolocate(geoRaw.ipCounts.map((r: any) => r.ip));
+        // Collect all unique IPs for geolocation
+        const allIps = new Set<string>();
+        for (const r of geoRaw.ipCounts) if (r.ip) allIps.add(r.ip);
+        for (const r of geoRaw.userIps) if (r.ip) allIps.add(r.ip);
+        for (const r of geoRaw.subscriberIps) if (r.ip) allIps.add(r.ip);
+        const geoMap = await batchGeolocate(Array.from(allIps));
+
+        // Events by country
         const countryCounts: Record<string, { country: string; code: string; count: number }> = {};
         for (const row of geoRaw.ipCounts) {
           const geo = geoMap.get(row.ip) || { country: 'Unknown', countryCode: 'XX' };
-          if (!countryCounts[geo.country]) {
-            countryCounts[geo.country] = { country: geo.country, code: geo.countryCode, count: 0 };
-          }
+          if (!countryCounts[geo.country]) countryCounts[geo.country] = { country: geo.country, code: geo.countryCode, count: 0 };
           countryCounts[geo.country].count += row.count;
         }
+
+        // Individual IPs with geo
+        const ipSessions = geoRaw.ipCounts.map((row: any) => {
+          const geo = geoMap.get(row.ip) || { country: 'Unknown', countryCode: 'XX', city: '' };
+          return { ip: row.ip, events: row.count, country: geo.country, code: geo.countryCode, city: geo.city || '' };
+        });
+
+        // Registered users by country
+        const userCountryCounts: Record<string, { country: string; code: string; count: number }> = {};
+        const usersWithGeo = geoRaw.userIps.map((row: any) => {
+          const geo = row.ip ? (geoMap.get(row.ip) || { country: 'Unknown', countryCode: 'XX', city: '' }) : { country: 'Unknown', countryCode: 'XX', city: '' };
+          const c = geo.country;
+          if (!userCountryCounts[c]) userCountryCounts[c] = { country: c, code: geo.countryCode, count: 0 };
+          userCountryCounts[c].count++;
+          return { email: row.email, registered_at: row.registered_at, country: c, city: geo.city || '' };
+        });
+
+        // Subscribers by country
+        const subCountryCounts: Record<string, { country: string; code: string; count: number }> = {};
+        const subsWithGeo = geoRaw.subscriberIps.map((row: any) => {
+          const geo = row.ip ? (geoMap.get(row.ip) || { country: 'Unknown', countryCode: 'XX', city: '' }) : { country: 'Unknown', countryCode: 'XX', city: '' };
+          const c = geo.country;
+          if (!subCountryCounts[c]) subCountryCounts[c] = { country: c, code: geo.countryCode, count: 0 };
+          subCountryCounts[c].count++;
+          return { email: row.email, plan: row.plan, country: c, city: geo.city || '' };
+        });
+
         return NextResponse.json({
           countries: Object.values(countryCounts).sort((a, b) => b.count - a.count),
           totalCountries: Object.keys(countryCounts).length,
+          ipSessions,
+          usersWithGeo,
+          usersByCountry: Object.values(userCountryCounts).sort((a, b) => b.count - a.count),
+          subsWithGeo,
+          subsByCountry: Object.values(subCountryCounts).sort((a, b) => b.count - a.count),
         });
       }
       case 'abuse':
