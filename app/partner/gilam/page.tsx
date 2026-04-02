@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { Eye, Cpu, LogOut } from 'lucide-react';
+import { Eye, Cpu, LogOut, Globe } from 'lucide-react';
 
 const RANGES = [
   { key: '7d', label: '7 days' },
@@ -115,6 +115,36 @@ export default function PartnerGilamPage() {
                 <p className="text-xs text-[#9b9bb0] mt-1">Projects generated via GPT integration</p>
               </div>
             </div>
+
+            {/* Source of Traffic */}
+            {data.bySource?.length > 0 && (
+              <div className="bg-[#0a0a1a] rounded-2xl border border-white/[0.06] p-6 mb-8">
+                <div className="flex items-center gap-2 mb-4">
+                  <Globe className="w-4 h-4 text-[#9b9bb0]" />
+                  <h3 className="text-sm font-semibold">Source of Traffic</h3>
+                </div>
+                <div className="space-y-3">
+                  {data.bySource.map((s: any) => {
+                    const maxTotal = Math.max(...data.bySource.map((x: any) => x.total));
+                    return (
+                      <div key={s.source} className="flex items-center gap-4">
+                        <div className="w-32 text-sm font-medium truncate">{s.source}</div>
+                        <div className="flex-1 relative h-8 bg-white/[0.03] rounded-lg overflow-hidden">
+                          <div
+                            className="absolute inset-y-0 left-0 rounded-lg bg-[#3388ff]/20"
+                            style={{ width: `${(s.total / maxTotal) * 100}%` }}
+                          />
+                          <div className="absolute inset-0 flex items-center px-3 text-xs">
+                            <span className="text-white font-semibold">{s.total.toLocaleString()} events</span>
+                            <span className="text-[#9b9bb0] ml-auto">{s.unique_ips.toLocaleString()} unique IPs</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Charts */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

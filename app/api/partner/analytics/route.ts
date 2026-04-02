@@ -27,6 +27,7 @@ export async function GET(request: Request) {
       gptPrefills,
       dailyVisitors,
       dailyGpt,
+      bySource,
     ] = await Promise.all([
       // Unique visitors (distinct IPs from link_click)
       query(`
@@ -55,6 +56,14 @@ export async function GET(request: Request) {
         WHERE source = ANY($1) AND event IN ('gpt_prefill', 'gpt_seedance_prefill') ${dateFilter}
         GROUP BY day ORDER BY day
       `, [sources]),
+
+      // Traffic by source
+      query(`
+        SELECT source, COUNT(*)::INTEGER as total, COUNT(DISTINCT ip)::INTEGER as unique_ips
+        FROM analytics_events
+        WHERE source = ANY($1) ${dateFilter}
+        GROUP BY source ORDER BY total DESC
+      `, [sources]),
     ]);
 
     // Merge daily data
@@ -72,6 +81,7 @@ export async function GET(request: Request) {
       uniqueVisitors: uniqueVisitors.rows[0]?.count || 0,
       gptPrefills: gptPrefills.rows[0]?.count || 0,
       byDay,
+      bySource: bySource.rows,
     });
   } catch (err: any) {
     console.error('[partner/analytics]', err.message);
