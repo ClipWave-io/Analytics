@@ -377,13 +377,21 @@ export async function getLiveData() {
 // ═══════════════════════════════════
 
 export async function getGeoData(from: string, to: string) {
-  const [ips, userIps, subscriberIps] = await Promise.all([
+  const [ips, ipAccounts, userIps, subscriberIps] = await Promise.all([
     // Events by IP
     query(`
       SELECT ip, COUNT(*)::INTEGER as count
       FROM analytics_events
       WHERE ip IS NOT NULL AND ip != '' AND created_at >= $1 AND created_at <= $2::date + 1
       GROUP BY ip ORDER BY count DESC LIMIT 500
+    `, [from, to]),
+    // Accounts per IP
+    query(`
+      SELECT ae.ip, array_agg(DISTINCT u.email) as emails, COUNT(DISTINCT u.id)::INTEGER as account_count
+      FROM analytics_events ae
+      JOIN users u ON ae.user_id::TEXT = u.id::TEXT
+      WHERE ae.ip IS NOT NULL AND ae.ip != '' AND ae.created_at >= $1 AND ae.created_at <= $2::date + 1
+      GROUP BY ae.ip ORDER BY account_count DESC
     `, [from, to]),
     // Registered users — get their most recent IP from analytics_events
     query(`
@@ -406,7 +414,13 @@ export async function getGeoData(from: string, to: string) {
     `),
   ]);
 
-  return { ipCounts: ips.rows, userIps: userIps.rows, subscriberIps: subscriberIps.rows };
+  // Build IP -> accounts map
+  const ipAccountMap: Record<string, { emails: string[]; account_count: number }> = {};
+  for (const row of ipAccounts.rows) {
+    ipAccountMap[row.ip] = { emails: row.emails || [], account_count: row.account_count };
+  }
+
+  return { ipCounts: ips.rows, ipAccountMap, userIps: userIps.rows, subscriberIps: subscriberIps.rows };
 }
 
 // ═══════════════════════════════════

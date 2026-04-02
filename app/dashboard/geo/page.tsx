@@ -101,6 +101,16 @@ export default function GeoPage() {
                   { key: 'country', label: 'Country' },
                   { key: 'city', label: 'City' },
                   { key: 'events', label: 'Events', align: 'right', render: (v: number) => v.toLocaleString() },
+                  { key: 'accounts', label: 'Accounts', align: 'right', render: (v: number, row: any) => (
+                    <span className={`font-semibold ${v >= 3 ? 'text-[#ef4444]' : v >= 2 ? 'text-[#f59e0b]' : 'text-[#9b9bb0]'}`}>{v}</span>
+                  )},
+                  { key: 'emails', label: 'Emails', render: (v: string[]) => v?.length > 0 ? (
+                    <div className="flex flex-wrap gap-1">
+                      {v.map(email => (
+                        <span key={email} className="font-mono text-xs px-2 py-0.5 rounded bg-white/[0.04]">{email}</span>
+                      ))}
+                    </div>
+                  ) : <span className="text-[#9b9bb0]">—</span> },
                 ]}
                 data={data.ipSessions || []}
                 exportFilename="geo-ips"

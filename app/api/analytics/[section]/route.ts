@@ -57,10 +57,11 @@ export async function GET(request: Request, { params }: { params: Params }) {
           countryCounts[geo.country].count += row.count;
         }
 
-        // Individual IPs with geo
+        // Individual IPs with geo and associated accounts
         const ipSessions = geoRaw.ipCounts.map((row: any) => {
           const geo = geoMap.get(row.ip) || { country: 'Unknown', countryCode: 'XX', city: '' };
-          return { ip: row.ip, events: row.count, country: geo.country, code: geo.countryCode, city: geo.city || '' };
+          const accts = geoRaw.ipAccountMap[row.ip] || { emails: [], account_count: 0 };
+          return { ip: row.ip, events: row.count, country: geo.country, code: geo.countryCode, city: geo.city || '', accounts: accts.account_count, emails: accts.emails };
         });
 
         // Registered users by country
