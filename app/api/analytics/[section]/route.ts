@@ -5,7 +5,7 @@ import {
   getLiveData, getGeoData, getAbuseData, getCohortData, getChurnData,
   getSegmentsData, getFeedbackData, getDevicesData, getPagesData,
   getLTVData, getExpansionData, getVelocityData, getFeaturesData,
-  getErrorsData, getUserJourney, getReturningData,
+  getErrorsData, getUserJourney, getReturningData, getCheckoutData,
 } from '@/lib/queries';
 import { batchGeolocate } from '@/lib/geo';
 
@@ -86,6 +86,11 @@ export async function GET(request: Request, { params }: { params: Params }) {
       }
       case 'returning':
         return NextResponse.json(await getReturningData(from, to));
+      case 'checkout': {
+        const checkoutData = await getCheckoutData(from, to);
+        if (!checkoutData) return NextResponse.json({ error: 'STRIPE_SECRET_KEY not configured' }, { status: 400 });
+        return NextResponse.json(checkoutData);
+      }
       default:
         return NextResponse.json({ error: 'Unknown section' }, { status: 404 });
     }

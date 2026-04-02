@@ -726,3 +726,73 @@ export async function getReturningData(from: string, to: string) {
 
   return { daily: daily.rows };
 }
+
+// ═══════════════════════════════════
+// CHECKOUT (Stripe)
+// ═══════════════════════════════════
+
+export async function getCheckoutData(from: string, to: string) {
+  const sk = process.env.STRIPE_SECRET_KEY;
+  if (!sk) return null;
+
+  const headers = {
+    'Authorization': `Bearer ${sk}`,
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
+
+  const fromTs = Math.floor(new Date(from).getTime() / 1000);
+  const toTs = Math.floor(new Date(to + 'T23:59:59Z').getTime() / 1000);
+
+  const [sessionsRes, chargesRes, refundsRes] = await Promise.all([
+    fetch(`https://api.stripe.com/v1/checkout/sessions?created[gte]=${fromTs}&created[lte]=${toTs}&limit=100&expand[]=data.payment_intent`, { headers }),
+    fetch(`https://api.stripe.com/v1/charges?created[gte]=${fromTs}&created[lte]=${toTs}&limit=100`, { headers }),
+    fetch(`https://api.stripe.com/v1/refunds?created[gte]=${fromTs}&created[lte]=${toTs}&limit=100`, { headers }),
+  ]);
+
+  const sessions = await sessionsRes.json();
+  const charges = await chargesRes.json();
+  const refunds = await refundsRes.json();
+
+  const sessionList = sessions.data || [];
+  const chargeList = charges.data || [];
+  const refundList = refunds.data || [];
+
+  const totalSessions = sessionList.length;
+  const completedSessions = sessionList.filter((s: any) => s.payment_status === 'paid').length;
+  const expiredSessions = sessionList.filter((s: any) => s.status === 'expired').length;
+  const openSessions = sessionList.filter((s: any) => s.status === 'open').length;
+
+  const totalRevenue = chargeList.filter((c: any) => c.paid && !c.refunded).reduce((sum: number, c: any) => sum + c.amount, 0) / 100;
+  const totalRefunded = refundList.reduce((sum: number, r: any) => sum + r.amount, 0) / 100;
+  const avgOrderValue = completedSessions > 0 ? totalRevenue / completedSessions : 0;
+  const conversionRate = totalSessions > 0 ? (completedSessions / totalSessions) * 100 : 0;
+
+  // Daily breakdown
+  const dailyMap: Record<string, { date: string; completed: number; expired: number; revenue: number }> = {};
+  for (const s of sessionList) {
+    const day = new Date(s.created * 1000).toISOString().slice(0, 10);
+    if (!dailyMap[day]) dailyMap[day] = { date: day, completed: 0, expired: 0, revenue: 0 };
+    if (s.payment_status === 'paid') {
+      dailyMap[day].completed++;
+      dailyMap[day].revenue += (s.amount_total || 0) / 100;
+    }
+    if (s.status === 'expired') dailyMap[day].expired++;
+  }
+  const daily = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
+
+  // Recent sessions
+  const recentSessions = sessionList.slice(0, 20).map((s: any) => ({
+    id: s.id,
+    email: s.customer_details?.email || s.customer_email || '—',
+    amount: (s.amount_total || 0) / 100,
+    currency: s.currency?.toUpperCase() || 'USD',
+    status: s.payment_status === 'paid' ? 'Paid' : s.status === 'expired' ? 'Expired' : 'Open',
+    created: new Date(s.created * 1000).toISOString().slice(0, 16).replace('T', ' '),
+  }));
+
+  return {
+    kpis: { totalSessions, completedSessions, expiredSessions, openSessions, totalRevenue, totalRefunded, avgOrderValue, conversionRate },
+    daily,
+    recentSessions,
+  };
+}
