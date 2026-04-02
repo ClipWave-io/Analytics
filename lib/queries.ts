@@ -231,79 +231,67 @@ export async function getCostsData(from: string, to: string) {
   const falKey = process.env.FAL_KEY;
   if (!falKey) return null;
 
-  const headers = {
-    'Authorization': `Key ${falKey}`,
-    'Content-Type': 'application/json',
-  };
-
+  const headers = { 'Authorization': `Key ${falKey}` };
   const startDate = new Date(from).toISOString();
   const endDate = new Date(to + 'T23:59:59Z').toISOString();
 
-  // Fetch usage with daily time series and summary
-  const usageRes = await fetch('https://api.fal.ai/v1/models/usage', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
+  // Fetch all pages of usage data (GET with query params, timeframe=day)
+  let allBuckets: any[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < 10; page++) {
+    const params = new URLSearchParams({
       start: startDate,
       end: endDate,
-      expand: ['time_series', 'summary'],
       timeframe: 'day',
-      limit: 100,
-    }),
-  });
+      limit: '100',
+    });
+    if (cursor) params.set('cursor', cursor);
 
-  if (!usageRes.ok) {
-    const err = await usageRes.text();
-    throw new Error(`fal.ai API error: ${usageRes.status} ${err}`);
+    const res = await fetch(`https://api.fal.ai/v1/models/usage?${params}`, { headers });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`fal.ai API error: ${res.status} ${err}`);
+    }
+    const json = await res.json();
+    const buckets = json.time_series || [];
+    allBuckets = allBuckets.concat(buckets);
+    if (!json.has_more) break;
+    cursor = json.next_cursor;
   }
 
-  const usage = await usageRes.json();
-
-  // Also fetch current credit balance
+  // Fetch credit balance
   const balanceRes = await fetch('https://api.fal.ai/v1/account/billing?expand=credits', { headers });
   const balance = balanceRes.ok ? await balanceRes.json() : null;
 
-  // Process line items into daily costs and by-endpoint breakdown
+  // Process time_series buckets into daily and per-endpoint aggregations
   const dailyMap: Record<string, { day: string; cost: number; requests: number }> = {};
-  const endpointMap: Record<string, { endpoint: string; requests: number; cost: number }> = {};
+  const endpointMap: Record<string, { endpoint: string; requests: number; cost: number; unit_price: number }> = {};
 
-  const items = usage.data || [];
-  for (const item of items) {
-    const cost = item.cost ?? ((item.quantity || 0) * (item.unit_price || 0));
-    const endpoint = item.endpoint_id || item.endpoint || 'unknown';
-
-    // By endpoint
-    if (!endpointMap[endpoint]) endpointMap[endpoint] = { endpoint, requests: 0, cost: 0 };
-    endpointMap[endpoint].requests += item.quantity || 1;
-    endpointMap[endpoint].cost += cost;
-  }
-
-  // Process time series if available
-  const timeSeries = usage.time_series || [];
-  for (const bucket of timeSeries) {
-    const day = (bucket.timestamp || bucket.time || '').slice(0, 10);
+  for (const bucket of allBuckets) {
+    const day = (bucket.bucket || '').slice(0, 10);
     if (!day) continue;
-    if (!dailyMap[day]) dailyMap[day] = { day, cost: 0, requests: 0 };
-    dailyMap[day].cost += bucket.cost || 0;
-    dailyMap[day].requests += bucket.request_count || bucket.count || 0;
-  }
 
-  // If no time series, aggregate from items
-  if (timeSeries.length === 0) {
-    for (const item of items) {
-      const day = (item.created_at || item.timestamp || '').slice(0, 10);
-      if (!day) continue;
-      const cost = item.cost ?? ((item.quantity || 0) * (item.unit_price || 0));
+    for (const result of (bucket.results || [])) {
+      const cost = result.cost || 0;
+      const qty = result.quantity || 0;
+      const endpoint = result.endpoint_id || 'unknown';
+
+      // Daily aggregation
       if (!dailyMap[day]) dailyMap[day] = { day, cost: 0, requests: 0 };
       dailyMap[day].cost += cost;
-      dailyMap[day].requests += item.quantity || 1;
+      dailyMap[day].requests += qty;
+
+      // Endpoint aggregation
+      if (!endpointMap[endpoint]) endpointMap[endpoint] = { endpoint, requests: 0, cost: 0, unit_price: result.unit_price || 0 };
+      endpointMap[endpoint].requests += qty;
+      endpointMap[endpoint].cost += cost;
     }
   }
 
   const dailyCosts = Object.values(dailyMap).sort((a, b) => a.day.localeCompare(b.day));
   const costsByEndpoint = Object.values(endpointMap).sort((a, b) => b.cost - a.cost);
-  const totalCost = usage.summary?.total_cost ?? costsByEndpoint.reduce((sum, e) => sum + e.cost, 0);
-  const totalRequests = usage.summary?.total_requests ?? costsByEndpoint.reduce((sum, e) => sum + e.requests, 0);
+  const totalCost = dailyCosts.reduce((sum, d) => sum + d.cost, 0);
+  const totalRequests = dailyCosts.reduce((sum, d) => sum + d.requests, 0);
 
   return {
     dailyCosts,

@@ -83,8 +83,9 @@ export default function CostsPage() {
             <DataTable
               columns={[
                 { key: 'endpoint', label: 'Endpoint', render: (v: string) => <span className="font-mono text-xs">{v}</span> },
-                { key: 'requests', label: 'Requests', align: 'right', render: (v: number) => v.toLocaleString() },
-                { key: 'cost', label: 'Cost', align: 'right', render: (v: any) => <span className="font-semibold">${Number(v).toFixed(4)}</span> },
+                { key: 'requests', label: 'Requests', align: 'right', render: (v: number) => Number(v).toFixed(1) },
+                { key: 'unit_price', label: 'Unit Price', align: 'right', render: (v: any) => `$${Number(v || 0).toFixed(2)}` },
+                { key: 'cost', label: 'Total Cost', align: 'right', render: (v: any) => <span className="font-semibold">${Number(v).toFixed(2)}</span> },
               ]}
               data={data.costsByEndpoint || []}
               exportFilename="fal-ai-costs"
