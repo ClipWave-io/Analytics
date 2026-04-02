@@ -57,11 +57,11 @@ export async function GET(request: Request) {
         GROUP BY day ORDER BY day
       `, [sources]),
 
-      // Traffic by source (unique IPs only)
+      // Traffic by source (unique IPs from link_click, consistent with KPI)
       query(`
         SELECT source, COUNT(DISTINCT ip)::INTEGER as unique_ips
         FROM analytics_events
-        WHERE source = ANY($1) AND ip IS NOT NULL ${dateFilter}
+        WHERE source = ANY($1) AND event = 'link_click' AND ip IS NOT NULL ${dateFilter}
         GROUP BY source ORDER BY unique_ips DESC
       `, [sources]),
     ]);
