@@ -9,7 +9,7 @@ import {
   TrendingUp, Megaphone, CreditCard, Radio, Globe, ShieldAlert,
   Grid3X3, Heart, BarChart3, ArrowUpDown, UserCheck, Gauge,
   Layers, AlertTriangle, UserSearch, MonitorSmartphone, FileText,
-  MessageSquare, Bell, Download, Menu, X, LogOut
+  MessageSquare, Bell, Download, Menu, X, LogOut, Film
 } from 'lucide-react';
 
 const NAV_SECTIONS = [
@@ -37,6 +37,7 @@ const NAV_SECTIONS = [
     items: [
       { href: '/dashboard/usage', label: 'Product Usage', icon: Zap },
       { href: '/dashboard/features', label: 'Feature Adoption', icon: Layers },
+      { href: '/dashboard/library', label: 'Library', icon: Film },
       { href: '/dashboard/errors', label: 'Error Tracking', icon: AlertTriangle },
       { href: '/dashboard/velocity', label: 'Velocity Metrics', icon: Gauge },
       { href: '/dashboard/journey', label: 'User Journey', icon: UserSearch },
