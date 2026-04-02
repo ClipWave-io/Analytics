@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { Eye, MousePointerClick, Users, CreditCard, Cpu, LogOut } from 'lucide-react';
 
@@ -32,20 +33,16 @@ function eventLabel(event: string) {
 }
 
 export default function PartnerGilamPage() {
-  const [authed, setAuthed] = useState(false);
-  const [password, setPassword] = useState('');
-  const [token, setToken] = useState('');
-  const [error, setError] = useState('');
+  const router = useRouter();
   const [range, setRange] = useState<string>('30d');
   const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  const fetchData = useCallback(async (r: string, t: string) => {
+  const fetchData = useCallback(async (r: string) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/partner/analytics?range=${r}&partner=gilam`, {
-        headers: { Authorization: `Bearer ${t}` },
-      });
+      const res = await fetch(`/api/partner/analytics?range=${r}`);
+      if (res.status === 401) { router.push('/login'); return; }
       if (!res.ok) throw new Error('Failed to fetch');
       setData(await res.json());
     } catch {
@@ -53,57 +50,16 @@ export default function PartnerGilamPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    const res = await fetch(`/api/partner/analytics?range=${range}&partner=gilam`, {
-      headers: { Authorization: `Bearer ${password}` },
-    });
-    if (res.ok) {
-      setToken(password);
-      setAuthed(true);
-      setData(await res.json());
-    } else {
-      setError('Invalid password');
-    }
-  };
+  }, [router]);
 
   useEffect(() => {
-    if (authed && token) fetchData(range, token);
-  }, [range, authed, token, fetchData]);
+    fetchData(range);
+  }, [range, fetchData]);
 
-  if (!authed) {
-    return (
-      <div className="min-h-screen bg-[#050510] flex items-center justify-center p-4">
-        <form onSubmit={handleLogin} className="w-full max-w-sm">
-          <div className="bg-[#0a0a1a] rounded-2xl border border-white/[0.06] p-8">
-            <div className="flex items-center gap-3 mb-6">
-              <svg width="32" height="32" viewBox="0 0 64 64" fill="none">
-                <path d="M6 34 Q14 34 19 28 Q24 22 27 18 Q30 14 32 30 Q34 44 38 40 Q42 36 48 34 Q54 32 58 34" stroke="#3388ff" strokeWidth="5" strokeLinecap="round" fill="none" />
-              </svg>
-              <div>
-                <h1 className="text-lg font-bold text-white">Clipwave</h1>
-                <p className="text-xs text-[#9b9bb0]">Partner Dashboard</p>
-              </div>
-            </div>
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder="Enter partner password"
-              className="w-full px-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white text-sm placeholder:text-[#9b9bb0]/50 focus:outline-none focus:border-[#3388ff]/50 mb-4"
-            />
-            {error && <p className="text-xs text-[#ef4444] mb-3">{error}</p>}
-            <button type="submit" className="w-full py-3 rounded-xl bg-[#3388ff] text-white text-sm font-semibold hover:bg-[#2266dd] transition-colors">
-              Access Dashboard
-            </button>
-          </div>
-        </form>
-      </div>
-    );
-  }
+  const handleLogout = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    router.push('/login');
+  };
 
   const conversionRate = data?.clicks > 0 ? ((data.registrations / data.clicks) * 100).toFixed(1) : '0.0';
 
@@ -111,7 +67,7 @@ export default function PartnerGilamPage() {
     <div className="min-h-screen bg-[#050510] text-white">
       <div className="max-w-[1200px] mx-auto px-4 py-8">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-8 flex-wrap gap-4">
           <div className="flex items-center gap-3">
             <svg width="28" height="28" viewBox="0 0 64 64" fill="none">
               <path d="M6 34 Q14 34 19 28 Q24 22 27 18 Q30 14 32 30 Q34 44 38 40 Q42 36 48 34 Q54 32 58 34" stroke="#3388ff" strokeWidth="5" strokeLinecap="round" fill="none" />
@@ -133,7 +89,7 @@ export default function PartnerGilamPage() {
                 </button>
               ))}
             </div>
-            <button onClick={() => { setAuthed(false); setToken(''); setData(null); }} className="p-2 rounded-lg text-[#9b9bb0] hover:text-white hover:bg-white/[0.06] transition-colors">
+            <button onClick={handleLogout} className="p-2 rounded-lg text-[#9b9bb0] hover:text-white hover:bg-white/[0.06] transition-colors" title="Logout">
               <LogOut className="w-4 h-4" />
             </button>
           </div>
@@ -219,8 +175,7 @@ export default function PartnerGilamPage() {
                         <td className="py-3 px-4 text-xs text-[#9b9bb0]">{new Date(e.created_at).toLocaleString()}</td>
                         <td className="py-3 px-4">
                           <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                            e.event === 'link_click' ? 'bg-[#3388ff]/10 text-[#3388ff]' :
-                            'bg-[#f59e0b]/10 text-[#f59e0b]'
+                            e.event === 'link_click' ? 'bg-[#3388ff]/10 text-[#3388ff]' : 'bg-[#f59e0b]/10 text-[#f59e0b]'
                           }`}>
                             {eventLabel(e.event)}
                           </span>

@@ -25,13 +25,13 @@ export default function LoginPage() {
         body: JSON.stringify({ username, password }),
       });
 
+      const data = await res.json();
       if (!res.ok) {
-        const data = await res.json();
         setError(data.error || 'Login failed');
         return;
       }
 
-      router.push('/dashboard');
+      router.push(data.redirect || '/dashboard');
     } catch {
       setError('Connection error');
     } finally {

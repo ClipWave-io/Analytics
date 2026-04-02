@@ -9,12 +9,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Username and password required' }, { status: 400 });
     }
 
-    if (!validateCredentials(username, password)) {
+    const result = validateCredentials(username, password);
+    if (!result.valid) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
 
-    const token = createSession(username);
-    const res = NextResponse.json({ ok: true });
+    const token = createSession(username, result.role);
+    const res = NextResponse.json({ ok: true, redirect: result.redirect, role: result.role });
     res.cookies.set('analytics_session', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
