@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { PageHeader, LoadingState } from '@/app/components/PageHeader';
-import { Film, Image, Video, User, ChevronDown, ChevronUp } from 'lucide-react';
+import { LoadingState } from '@/app/components/PageHeader';
+import { Film, Image, Video, User, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 
 interface RunItem {
   runId: string;
@@ -64,7 +64,15 @@ export default function LibraryPage() {
 
   return (
     <>
-      <PageHeader title="Library" subtitle="All generated keyframes & clips" onRefresh={fetchData} />
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold">Library</h1>
+          <p className="text-sm text-[#9b9bb0]">All generated keyframes & clips</p>
+        </div>
+        <button onClick={fetchData} className="p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-[#9b9bb0] hover:text-white transition-colors">
+          <RefreshCw className="w-4 h-4" />
+        </button>
+      </div>
 
       {/* Filters */}
       <div className="flex gap-2 mb-6 flex-wrap">

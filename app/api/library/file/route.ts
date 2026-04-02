@@ -25,7 +25,7 @@ export async function GET(request: Request) {
   }
 
   const contentType = file.endsWith('.mp4') ? 'video/mp4' : 'image/png';
-  return new NextResponse(buffer, {
+  return new NextResponse(new Uint8Array(buffer), {
     headers: {
       'Content-Type': contentType,
       'Cache-Control': 'public, max-age=86400',
