@@ -24,13 +24,13 @@ export async function getOverviewKPIs(from: string, to: string) {
     query('SELECT COUNT(*)::INTEGER as count FROM users'),
     query('SELECT COUNT(*)::INTEGER as count FROM users WHERE created_at >= $1 AND created_at <= $2::date + 1', [from, to]),
     query('SELECT COUNT(*)::INTEGER as count FROM users WHERE created_at >= $1 AND created_at <= $2::date + 1', [prevFrom, prevTo]),
-    query(`SELECT COUNT(DISTINCT user_id)::INTEGER as count FROM pipeline_runs WHERE updated_at >= NOW() - INTERVAL '7 days'`),
+    query(`SELECT COUNT(DISTINCT user_id)::INTEGER as count FROM run_ownership WHERE created_at >= NOW() - INTERVAL '7 days'`),
     query(`SELECT COUNT(*)::INTEGER as count, COALESCE(SUM(CASE WHEN plan='starter' THEN 16 WHEN plan='pro' THEN 42 WHEN plan='agency' THEN 109 ELSE 0 END), 0)::INTEGER as mrr FROM subscriptions WHERE status = 'active' AND plan != 'free'`),
     // Approximate previous MRR using subscription created_at — not perfect but useful
     query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'active' AND plan != 'free'`),
-    query('SELECT COUNT(*)::INTEGER as count FROM pipeline_runs WHERE created_at >= $1 AND created_at <= $2::date + 1', [from, to]),
-    query('SELECT COUNT(*)::INTEGER as count FROM pipeline_runs WHERE created_at >= $1 AND created_at <= $2::date + 1', [prevFrom, prevTo]),
-    query(`SELECT COUNT(*)::INTEGER as count FROM pipeline_runs WHERE created_at >= $1 AND created_at <= $2::date + 1 AND status IN ('completed', 'done', 'finished')`, [from, to]),
+    query('SELECT COUNT(*)::INTEGER as count FROM run_ownership WHERE created_at >= $1 AND created_at <= $2::date + 1', [from, to]),
+    query('SELECT COUNT(*)::INTEGER as count FROM run_ownership WHERE created_at >= $1 AND created_at <= $2::date + 1', [prevFrom, prevTo]),
+    query(`SELECT COUNT(*)::INTEGER as count FROM run_ownership WHERE created_at >= $1 AND created_at <= $2::date + 1 AND status = 'completed'`, [from, to]),
     query('SELECT COUNT(*)::INTEGER as count FROM analytics_events WHERE created_at >= $1 AND created_at <= $2::date + 1', [from, to]),
   ]);
 
@@ -136,7 +136,7 @@ export async function getFunnelData(from: string, to: string) {
   const totalRegistrations = await query('SELECT COUNT(*)::INTEGER as count FROM users WHERE created_at >= $1 AND created_at <= $2::date + 1', [from, to]);
   const totalSubscriptions = await query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE created_at >= $1 AND created_at <= $2::date + 1 AND plan != 'free'`, [from, to]);
   const firstVideos = await query(`
-    SELECT COUNT(DISTINCT user_id)::INTEGER as count FROM pipeline_runs
+    SELECT COUNT(DISTINCT user_id)::INTEGER as count FROM run_ownership
     WHERE created_at >= $1 AND created_at <= $2::date + 1
   `, [from, to]);
 
@@ -158,17 +158,17 @@ export async function getFunnelData(from: string, to: string) {
 
 export async function getUsageData(from: string, to: string) {
   const [daily, byStatus, topUsers, recentRuns] = await Promise.all([
-    query('SELECT DATE(created_at)::TEXT as day, COUNT(*)::INTEGER as count FROM pipeline_runs WHERE created_at >= $1 AND created_at <= $2::date + 1 GROUP BY day ORDER BY day', [from, to]),
-    query('SELECT status, COUNT(*)::INTEGER as count FROM pipeline_runs WHERE created_at >= $1 AND created_at <= $2::date + 1 GROUP BY status ORDER BY count DESC', [from, to]),
+    query('SELECT DATE(created_at)::TEXT as day, COUNT(*)::INTEGER as count FROM run_ownership WHERE created_at >= $1 AND created_at <= $2::date + 1 GROUP BY day ORDER BY day', [from, to]),
+    query('SELECT status, COUNT(*)::INTEGER as count FROM run_ownership WHERE created_at >= $1 AND created_at <= $2::date + 1 GROUP BY status ORDER BY count DESC', [from, to]),
     query(`
       SELECT u.email, u.name, COUNT(pr.run_id)::INTEGER as runs
-      FROM pipeline_runs pr JOIN users u ON u.id = pr.user_id
+      FROM run_ownership pr JOIN users u ON u.id = pr.user_id
       WHERE pr.created_at >= $1 AND pr.created_at <= $2::date + 1
       GROUP BY u.email, u.name ORDER BY runs DESC LIMIT 15
     `, [from, to]),
     query(`
-      SELECT pr.run_id, pr.status, pr.product_name, pr.created_at, u.email
-      FROM pipeline_runs pr LEFT JOIN users u ON u.id = pr.user_id
+      SELECT pr.run_id, pr.status, pr.product_description, pr.created_at, u.email
+      FROM run_ownership pr LEFT JOIN users u ON u.id = pr.user_id
       WHERE pr.created_at >= $1 AND pr.created_at <= $2::date + 1
       ORDER BY pr.created_at DESC LIMIT 50
     `, [from, to]),
@@ -463,7 +463,7 @@ export async function getCohortData() {
     ),
     activity AS (
       SELECT pr.user_id, DATE_TRUNC('month', pr.created_at)::DATE::TEXT as active_month
-      FROM pipeline_runs pr
+      FROM run_ownership pr
       GROUP BY pr.user_id, active_month
     )
     SELECT uc.cohort_month, a.active_month, COUNT(DISTINCT a.user_id)::INTEGER as active_users,
@@ -523,11 +523,11 @@ export async function getSegmentsData() {
     // At risk: active sub but no runs in 14 days
     query(`
       SELECT u.email, u.name, s.plan, s.created_at as sub_date,
-        (SELECT MAX(pr.created_at) FROM pipeline_runs pr WHERE pr.user_id = u.id) as last_run
+        (SELECT MAX(pr.created_at) FROM run_ownership pr WHERE pr.user_id = u.id) as last_run
       FROM subscriptions s
       JOIN users u ON u.id = s.user_id
       WHERE s.status = 'active' AND s.plan != 'free'
-        AND NOT EXISTS (SELECT 1 FROM pipeline_runs pr WHERE pr.user_id = u.id AND pr.created_at >= NOW() - INTERVAL '14 days')
+        AND NOT EXISTS (SELECT 1 FROM run_ownership pr WHERE pr.user_id = u.id AND pr.created_at >= NOW() - INTERVAL '14 days')
     `),
     // Sleepers: paying but <10% usage
     query(`
@@ -698,7 +698,7 @@ export async function getVelocityData() {
     query(`
       SELECT AVG(EXTRACT(EPOCH FROM (first_run - u.created_at)) / 3600)::NUMERIC(10,1) as avg_hours
       FROM users u
-      JOIN (SELECT user_id, MIN(created_at) as first_run FROM pipeline_runs GROUP BY user_id) fr ON fr.user_id = u.id
+      JOIN (SELECT user_id, MIN(created_at) as first_run FROM run_ownership GROUP BY user_id) fr ON fr.user_id = u.id
     `),
     query(`
       SELECT AVG(EXTRACT(EPOCH FROM (s.created_at - u.created_at)) / 3600)::NUMERIC(10,1) as avg_hours
@@ -720,13 +720,13 @@ export async function getVelocityData() {
 
 export async function getFeaturesData(from: string, to: string) {
   const [pipelineUsers, breakdownUsers, editorUsers, avatarUsers] = await Promise.all([
-    query(`SELECT COUNT(DISTINCT user_id)::INTEGER as count FROM pipeline_runs WHERE created_at >= $1 AND created_at <= $2::date + 1`, [from, to]),
+    query(`SELECT COUNT(DISTINCT user_id)::INTEGER as count FROM run_ownership WHERE created_at >= $1 AND created_at <= $2::date + 1`, [from, to]),
     query(`SELECT COUNT(DISTINCT user_id)::INTEGER as count FROM credit_transactions WHERE type = 'video_breakdown' AND created_at >= $1 AND created_at <= $2::date + 1`, [from, to]),
     query(`SELECT COUNT(DISTINCT user_id)::INTEGER as count FROM credit_transactions WHERE type = 'editor_transcribe' AND created_at >= $1 AND created_at <= $2::date + 1`, [from, to]),
     query(`SELECT COUNT(DISTINCT user_id)::INTEGER as count FROM credit_transactions WHERE type IN ('avatar_gen','avatar_gen_pro') AND created_at >= $1 AND created_at <= $2::date + 1`, [from, to]),
   ]);
 
-  const totalActive = await query(`SELECT COUNT(DISTINCT user_id)::INTEGER as count FROM pipeline_runs WHERE created_at >= $1 AND created_at <= $2::date + 1`, [from, to]);
+  const totalActive = await query(`SELECT COUNT(DISTINCT user_id)::INTEGER as count FROM run_ownership WHERE created_at >= $1 AND created_at <= $2::date + 1`, [from, to]);
   const total = totalActive.rows[0]?.count || 1;
 
   return {
@@ -747,13 +747,13 @@ export async function getErrorsData(from: string, to: string) {
   const [dailyFailures, failedRuns] = await Promise.all([
     query(`
       SELECT DATE(created_at)::TEXT as day, COUNT(*)::INTEGER as count
-      FROM pipeline_runs WHERE status IN ('error','failed') AND created_at >= $1 AND created_at <= $2::date + 1
+      FROM run_ownership WHERE status IN ('failed','stopped') AND created_at >= $1 AND created_at <= $2::date + 1
       GROUP BY day ORDER BY day
     `, [from, to]),
     query(`
-      SELECT pr.run_id, pr.status, pr.product_name, pr.created_at, u.email
-      FROM pipeline_runs pr LEFT JOIN users u ON u.id = pr.user_id
-      WHERE pr.status IN ('error','failed') AND pr.created_at >= $1 AND pr.created_at <= $2::date + 1
+      SELECT pr.run_id, pr.status, pr.product_description, pr.created_at, u.email
+      FROM run_ownership pr LEFT JOIN users u ON u.id = pr.user_id
+      WHERE pr.status IN ('failed','stopped') AND pr.created_at >= $1 AND pr.created_at <= $2::date + 1
       ORDER BY pr.created_at DESC LIMIT 30
     `, [from, to]),
   ]);
@@ -782,7 +782,7 @@ export async function getUserJourney(email: string) {
 
   const userId = user.rows[0].id;
   const [runs, transactions, feedbacks, events] = await Promise.all([
-    query('SELECT run_id, status, product_name, created_at FROM pipeline_runs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50', [userId]),
+    query('SELECT run_id, status, product_description, created_at FROM run_ownership WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50', [userId]),
     query('SELECT amount, type, description, balance_after, created_at FROM credit_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50', [userId]),
     query('SELECT message, page_url, created_at FROM feedback WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20', [userId]),
     query(`SELECT event, source, metadata, created_at FROM analytics_events WHERE user_id = $1::TEXT ORDER BY created_at DESC LIMIT 50`, [userId]),
@@ -802,15 +802,29 @@ export async function getUserJourney(email: string) {
 // ═══════════════════════════════════
 
 export async function getReturningData(from: string, to: string) {
+  // Anonymous events have user_id NULL but ip populated. Bucket each IP's first
+  // ever visit; on its first day it's "new", on subsequent days it's "returning".
   const daily = await query(`
-    SELECT DATE(ae.created_at)::TEXT as day,
-      COUNT(DISTINCT CASE WHEN u.created_at::DATE = ae.created_at::DATE THEN ae.ip END)::INTEGER as new_users,
-      COUNT(DISTINCT CASE WHEN u.created_at::DATE < ae.created_at::DATE THEN ae.ip END)::INTEGER as returning_users
-    FROM analytics_events ae
-    LEFT JOIN users u ON ae.user_id::TEXT = u.id::TEXT
-    WHERE ae.created_at >= $1 AND ae.created_at <= $2::date + 1
-      AND ae.event IN ('page_visit','dashboard_visit')
-    GROUP BY day ORDER BY day
+    WITH first_seen AS (
+      SELECT ip, MIN(DATE(created_at AT TIME ZONE 'Europe/Rome')) as first_day
+      FROM analytics_events
+      WHERE ip IS NOT NULL AND event IN ('page_visit','dashboard_visit','link_click')
+      GROUP BY ip
+    ),
+    in_range AS (
+      SELECT DISTINCT DATE(ae.created_at AT TIME ZONE 'Europe/Rome') as day, ae.ip
+      FROM analytics_events ae
+      WHERE ae.ip IS NOT NULL
+        AND ae.event IN ('page_visit','dashboard_visit','link_click')
+        AND ae.created_at >= $1 AND ae.created_at <= $2::date + 1
+    )
+    SELECT ir.day::TEXT as day,
+      COUNT(DISTINCT CASE WHEN fs.first_day = ir.day THEN ir.ip END)::INTEGER as new_users,
+      COUNT(DISTINCT CASE WHEN fs.first_day < ir.day THEN ir.ip END)::INTEGER as returning_users
+    FROM in_range ir
+    JOIN first_seen fs ON fs.ip = ir.ip
+    GROUP BY ir.day
+    ORDER BY ir.day
   `, [from, to]);
 
   return { daily: daily.rows };
@@ -1125,7 +1139,7 @@ export async function getOverviewExtras(from: string, to: string) {
   ] = await Promise.all([
     query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'active' AND plan != 'free'`),
     query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= to_timestamp($1) AND updated_at <= to_timestamp($2)`, [fromTs, toTs]),
-    query(`SELECT COUNT(*)::INTEGER as count FROM pipeline_runs WHERE status IN ('error','failed') AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
+    query(`SELECT COUNT(*)::INTEGER as count FROM run_ownership WHERE status IN ('failed','stopped') AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
     query(`SELECT COALESCE(SUM(ABS(amount)),0)::INTEGER as total FROM credit_transactions WHERE type IN ('video_breakdown','editor_transcribe','avatar_gen','avatar_gen_pro','pipeline_run') AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
     query(`SELECT COUNT(DISTINCT ip)::INTEGER as count FROM analytics_events WHERE event IN ('link_click','page_visit') AND ip IS NOT NULL AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
     query(`SELECT COUNT(*)::INTEGER as count FROM analytics_events WHERE event IN ('link_click','page_visit','dashboard_visit') AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
