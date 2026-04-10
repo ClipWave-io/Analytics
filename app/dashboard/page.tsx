@@ -10,6 +10,7 @@ import {
 import {
   DollarSign, Users, Zap, Activity, UserCheck, TrendingUp, TrendingDown,
   Eye, RefreshCw, UserPlus, UserMinus, AlertTriangle, Coins, Globe, Banknote,
+  MousePointerClick, ShoppingCart, Target,
 } from 'lucide-react';
 
 interface MoneyBucket { count: number; amount: number }
@@ -54,6 +55,17 @@ interface OverviewData {
     traffic: {
       uniqueVisitors: number;
       topSources: Array<{ source: string; visitors: number }>;
+    };
+    funnel: {
+      visitors: number;
+      pageviews: number;
+      signups: number;
+      checkoutsStarted: number;
+      checkoutsPaid: number;
+      checkoutRevenue: number;
+      conversionRate: number;
+      signupRate: number;
+      checkoutConversion: number;
     };
   };
   visitors: VisitorRow[];
@@ -209,6 +221,51 @@ export default function OverviewPage() {
             <KPICard title="Completed" value={data.completedRuns} icon={<Activity className="w-5 h-5" />} color="#8b5cf6" />
             <KPICard title="Errors" value={data.extras.errors} icon={<AlertTriangle className="w-5 h-5" />} color={data.extras.errors > 0 ? '#ef4444' : '#9b9bb0'} />
             <KPICard title="Credits Used" value={data.extras.creditsConsumed} icon={<Coins className="w-5 h-5" />} color="#f59e0b" />
+          </div>
+
+          {/* ══════════════════════════════════════════════════ */}
+          {/* ACQUISITION FUNNEL — Visitors → Signups → Checkout → Paid */}
+          {/* ══════════════════════════════════════════════════ */}
+          <div className="flex items-center gap-2 mb-3">
+            <Target className="w-4 h-4 text-[#a855f7]" />
+            <h2 className="text-sm font-bold uppercase tracking-wider text-[#9b9bb0]">Acquisition Funnel · {range.label}</h2>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-4">
+            <KPICard title="Visitors" value={data.extras.funnel.visitors} icon={<Eye className="w-5 h-5" />} color="#3388ff" />
+            <KPICard title="Sessions" value={data.extras.funnel.pageviews} icon={<MousePointerClick className="w-5 h-5" />} color="#06b6d4" />
+            <KPICard title="Signups" value={data.extras.funnel.signups} icon={<UserPlus className="w-5 h-5" />} color="#8b5cf6" />
+            <KPICard title="Checkout Started" value={data.extras.funnel.checkoutsStarted} icon={<ShoppingCart className="w-5 h-5" />} color="#f59e0b" />
+            <KPICard title="Purchases" value={data.extras.funnel.checkoutsPaid} icon={<DollarSign className="w-5 h-5" />} color="#22c55e" />
+            <KPICard
+              title="Conv. Rate"
+              value={`${data.extras.funnel.conversionRate.toFixed(2)}%`}
+              icon={<Target className="w-5 h-5" />}
+              color={data.extras.funnel.conversionRate > 1 ? '#22c55e' : '#9b9bb0'}
+            />
+          </div>
+          <div className="bg-[#0a0a1a] rounded-2xl border border-white/[0.06] p-4 mb-8 text-xs text-[#9b9bb0] flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-6 flex-wrap">
+              <span>
+                <span className="text-[#3388ff] font-semibold">{data.extras.funnel.visitors.toLocaleString()}</span> visits →{' '}
+                <span className="text-[#8b5cf6] font-semibold">{data.extras.funnel.signups.toLocaleString()}</span> signups
+                {' '}<span className="text-white/50">({data.extras.funnel.signupRate.toFixed(1)}%)</span>
+              </span>
+              <span>
+                <span className="text-[#8b5cf6] font-semibold">{data.extras.funnel.signups.toLocaleString()}</span> signups →{' '}
+                <span className="text-[#22c55e] font-semibold">{data.extras.funnel.checkoutsPaid.toLocaleString()}</span> purchases
+                {' '}<span className="text-white/50">({data.extras.funnel.signups > 0 ? ((data.extras.funnel.checkoutsPaid / data.extras.funnel.signups) * 100).toFixed(1) : '0.0'}%)</span>
+              </span>
+              <span>
+                Checkout → paid:{' '}
+                <span className="text-white font-semibold">{data.extras.funnel.checkoutConversion.toFixed(1)}%</span>
+              </span>
+            </div>
+            <div className="text-right">
+              <span className="text-[#9b9bb0]">Revenue per visit:{' '}</span>
+              <span className="text-[#22c55e] font-bold">
+                ${data.extras.funnel.visitors > 0 ? (data.extras.funnel.checkoutRevenue / data.extras.funnel.visitors).toFixed(2) : '0.00'}
+              </span>
+            </div>
           </div>
 
           {/* ══════════════════════════════════════════════════ */}

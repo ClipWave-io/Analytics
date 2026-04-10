@@ -1078,27 +1078,79 @@ export async function getOverviewVisitors(from: string, to: string) {
     .sort((a, b) => b.visited_at.localeCompare(a.visited_at));
 }
 
+async function fetchStripeSessions(fromTs: number, toTs: number): Promise<any[]> {
+  const sk = process.env.STRIPE_SECRET_KEY;
+  if (!sk) return [];
+  const headers = { 'Authorization': `Bearer ${sk}` };
+  const all: any[] = [];
+  let startingAfter: string | null = null;
+  for (let i = 0; i < 10; i++) {
+    const params = new URLSearchParams({
+      'created[gte]': String(fromTs),
+      'created[lte]': String(toTs),
+      'limit': '100',
+    });
+    if (startingAfter) params.set('starting_after', startingAfter);
+    const res = await fetch(`https://api.stripe.com/v1/checkout/sessions?${params}`, { headers });
+    if (!res.ok) break;
+    const json = await res.json();
+    const data: any[] = json.data || [];
+    all.push(...data);
+    if (!json.has_more || data.length === 0) break;
+    startingAfter = data[data.length - 1].id;
+  }
+  return all;
+}
+
 export async function getOverviewExtras(from: string, to: string) {
+  // Compute Rome-local epoch boundaries for Stripe calls
+  const boundsRes = await query(
+    `SELECT EXTRACT(EPOCH FROM (($1::timestamp) AT TIME ZONE 'Europe/Rome'))::BIGINT as f,
+            EXTRACT(EPOCH FROM (($2::timestamp + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome'))::BIGINT - 1 as t`,
+    [from, to]
+  );
+  const fromTs = Number(boundsRes.rows[0]?.f || 0);
+  const toTs = Number(boundsRes.rows[0]?.t || 0);
+
   const [
     activeSubsRes,
     cancelledInRange,
     errorsRes,
     creditsConsumedRes,
-    trafficVisitorsRes,
+    visitorsRes,
+    sessionsEventsRes,
     topSourcesRes,
+    newUsersRes,
+    checkoutSessions,
   ] = await Promise.all([
     query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'active' AND plan != 'free'`),
-    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= $1 AND updated_at <= $2::date + 1`, [from, to]),
-    query(`SELECT COUNT(*)::INTEGER as count FROM pipeline_runs WHERE status IN ('error','failed') AND created_at >= $1 AND created_at <= $2::date + 1`, [from, to]),
-    query(`SELECT COALESCE(SUM(ABS(amount)),0)::INTEGER as total FROM credit_transactions WHERE type IN ('video_breakdown','editor_transcribe','avatar_gen','avatar_gen_pro') AND created_at >= $1 AND created_at <= $2::date + 1`, [from, to]),
-    query(`SELECT COUNT(DISTINCT ip)::INTEGER as count FROM analytics_events WHERE event = 'link_click' AND ip IS NOT NULL AND created_at >= $1 AND created_at <= $2::date + 1`, [from, to]),
-    query(`SELECT COALESCE(NULLIF(source,''),'direct') as source, COUNT(DISTINCT ip)::INTEGER as visitors FROM analytics_events WHERE event = 'link_click' AND ip IS NOT NULL AND created_at >= $1 AND created_at <= $2::date + 1 GROUP BY 1 ORDER BY visitors DESC LIMIT 8`, [from, to]),
+    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= to_timestamp($1) AND updated_at <= to_timestamp($2)`, [fromTs, toTs]),
+    query(`SELECT COUNT(*)::INTEGER as count FROM pipeline_runs WHERE status IN ('error','failed') AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
+    query(`SELECT COALESCE(SUM(ABS(amount)),0)::INTEGER as total FROM credit_transactions WHERE type IN ('video_breakdown','editor_transcribe','avatar_gen','avatar_gen_pro','pipeline_run') AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
+    query(`SELECT COUNT(DISTINCT ip)::INTEGER as count FROM analytics_events WHERE event IN ('link_click','page_visit') AND ip IS NOT NULL AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
+    query(`SELECT COUNT(*)::INTEGER as count FROM analytics_events WHERE event IN ('link_click','page_visit','dashboard_visit') AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
+    query(`SELECT COALESCE(NULLIF(source,''),'direct') as source, COUNT(DISTINCT ip)::INTEGER as visitors FROM analytics_events WHERE event IN ('link_click','page_visit') AND ip IS NOT NULL AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2) GROUP BY 1 ORDER BY visitors DESC LIMIT 8`, [fromTs, toTs]),
+    query(`SELECT COUNT(*)::INTEGER as count FROM users WHERE created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
+    fetchStripeSessions(fromTs, toTs),
   ]);
 
   const activeSubs = activeSubsRes.rows[0]?.count || 0;
   const cancelled = cancelledInRange.rows[0]?.count || 0;
   // Rough churn rate: cancellations / (active + cancellations) in range
   const churnRate = activeSubs + cancelled > 0 ? (cancelled / (activeSubs + cancelled)) * 100 : 0;
+
+  // Acquisition funnel
+  const totalVisitors = visitorsRes.rows[0]?.count || 0;
+  const pageviews = sessionsEventsRes.rows[0]?.count || 0;
+  const newUsers = newUsersRes.rows[0]?.count || 0;
+  const checkoutsStarted = checkoutSessions.length;
+  const checkoutsPaid = checkoutSessions.filter((s: any) => s.payment_status === 'paid').length;
+  const checkoutRevenue = checkoutSessions
+    .filter((s: any) => s.payment_status === 'paid')
+    .reduce((sum: number, s: any) => sum + (s.amount_total || 0), 0) / 100;
+  const conversionRate = totalVisitors > 0 ? (checkoutsPaid / totalVisitors) * 100 : 0;
+  const signupRate = totalVisitors > 0 ? (newUsers / totalVisitors) * 100 : 0;
+  const checkoutConversion = checkoutsStarted > 0 ? (checkoutsPaid / checkoutsStarted) * 100 : 0;
 
   // LTV avg weighted by plan (same constants used in MRR calc, avg tenure ~6 months placeholder)
   const planDist = await query(`SELECT plan, COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'active' AND plan != 'free' GROUP BY plan`);
@@ -1120,8 +1172,19 @@ export async function getOverviewExtras(from: string, to: string) {
     errors: errorsRes.rows[0]?.count || 0,
     creditsConsumed: creditsConsumedRes.rows[0]?.total || 0,
     traffic: {
-      uniqueVisitors: trafficVisitorsRes.rows[0]?.count || 0,
+      uniqueVisitors: totalVisitors,
       topSources: topSourcesRes.rows,
+    },
+    funnel: {
+      visitors: totalVisitors,
+      pageviews,
+      signups: newUsers,
+      checkoutsStarted,
+      checkoutsPaid,
+      checkoutRevenue,
+      conversionRate,
+      signupRate,
+      checkoutConversion,
     },
   };
 }

@@ -1,47 +1,75 @@
-// Lightweight IP geolocation using ip-api.com (free, no signup, 45 req/min)
-// For production with high volume, replace with MaxMind GeoLite2
+// IP geolocation using ip-api.com POST /batch endpoint.
+// Free tier: 45 batch requests/min, 100 IPs per batch = 4500 IPs/min.
+// Cache is process-local; on Railway the dyno is long-lived enough to benefit.
 
-const cache = new Map<string, { country: string; countryCode: string; city: string }>();
+type Geo = { country: string; countryCode: string; city: string };
 
-export async function geolocateIP(ip: string): Promise<{ country: string; countryCode: string; city: string }> {
-  if (!ip || ip === 'unknown' || ip === '127.0.0.1' || ip === '::1') {
-    return { country: 'Unknown', countryCode: 'XX', city: '' };
+const cache = new Map<string, Geo>();
+const UNKNOWN: Geo = { country: 'Unknown', countryCode: 'XX', city: '' };
+
+function isInvalid(ip: string): boolean {
+  if (!ip || ip === 'unknown' || ip === '127.0.0.1' || ip === '::1') return true;
+  // Private / reserved ranges — ip-api.com returns "reserved range" anyway
+  if (ip.startsWith('10.') || ip.startsWith('192.168.')) return true;
+  if (ip.startsWith('172.')) {
+    const n = Number(ip.split('.')[1]);
+    if (n >= 16 && n <= 31) return true;
   }
-
-  if (cache.has(ip)) return cache.get(ip)!;
-
-  try {
-    const res = await fetch(`http://ip-api.com/json/${ip}?fields=country,countryCode,city`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!res.ok) return { country: 'Unknown', countryCode: 'XX', city: '' };
-    const data = await res.json();
-    const result = {
-      country: data.country || 'Unknown',
-      countryCode: data.countryCode || 'XX',
-      city: data.city || '',
-    };
-    cache.set(ip, result);
-    return result;
-  } catch {
-    return { country: 'Unknown', countryCode: 'XX', city: '' };
-  }
+  return false;
 }
 
-// Batch geolocate unique IPs (respects rate limit)
-export async function batchGeolocate(ips: string[]): Promise<Map<string, { country: string; countryCode: string; city: string }>> {
-  const unique = [...new Set(ips.filter(ip => ip && ip !== 'unknown'))];
-  const results = new Map<string, { country: string; countryCode: string; city: string }>();
+export async function geolocateIP(ip: string): Promise<Geo> {
+  if (isInvalid(ip)) return UNKNOWN;
+  if (cache.has(ip)) return cache.get(ip)!;
+  const results = await batchGeolocate([ip]);
+  return results.get(ip) || UNKNOWN;
+}
 
-  // Process in batches of 40 to stay under rate limit
-  for (let i = 0; i < unique.length; i += 40) {
-    const batch = unique.slice(i, i + 40);
-    const promises = batch.map(async ip => {
-      const geo = await geolocateIP(ip);
-      results.set(ip, geo);
-    });
-    await Promise.all(promises);
-    if (i + 40 < unique.length) await new Promise(r => setTimeout(r, 1500));
+export async function batchGeolocate(ips: string[]): Promise<Map<string, Geo>> {
+  const results = new Map<string, Geo>();
+  const toFetch: string[] = [];
+
+  for (const ip of new Set(ips)) {
+    if (isInvalid(ip)) {
+      results.set(ip, UNKNOWN);
+      continue;
+    }
+    const cached = cache.get(ip);
+    if (cached) {
+      results.set(ip, cached);
+    } else {
+      toFetch.push(ip);
+    }
+  }
+
+  // POST /batch accepts up to 100 IPs per request
+  for (let i = 0; i < toFetch.length; i += 100) {
+    const chunk = toFetch.slice(i, i + 100);
+    try {
+      const res = await fetch('http://ip-api.com/batch?fields=status,query,country,countryCode,city', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(chunk),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) {
+        for (const ip of chunk) results.set(ip, UNKNOWN);
+        continue;
+      }
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        for (const row of data) {
+          const ip: string = row.query;
+          const geo: Geo = row.status === 'success'
+            ? { country: row.country || 'Unknown', countryCode: row.countryCode || 'XX', city: row.city || '' }
+            : UNKNOWN;
+          if (geo.country !== 'Unknown') cache.set(ip, geo);
+          results.set(ip, geo);
+        }
+      }
+    } catch {
+      for (const ip of chunk) results.set(ip, UNKNOWN);
+    }
   }
 
   return results;
