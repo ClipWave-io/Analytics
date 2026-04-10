@@ -899,7 +899,6 @@ async function fetchStripeInvoices(fromTs: number, toTs: number): Promise<any[]>
   const headers = { 'Authorization': `Bearer ${sk}` };
   const all: any[] = [];
   let startingAfter: string | null = null;
-  // Stripe hard-caps at ~100 per page; paginate up to 10 pages for safety.
   for (let i = 0; i < 10; i++) {
     const params = new URLSearchParams({
       'created[gte]': String(fromTs),
@@ -919,24 +918,58 @@ async function fetchStripeInvoices(fromTs: number, toTs: number): Promise<any[]>
   return all;
 }
 
+// Fetch Stripe Checkout Sessions in payment mode (= one-off top-ups).
+// Subscription checkouts have mode='subscription' and are already covered
+// by the invoices fetch, so we only want mode='payment' sessions here.
+async function fetchStripeTopupSessions(fromTs: number, toTs: number): Promise<any[]> {
+  const sk = process.env.STRIPE_SECRET_KEY;
+  if (!sk) return [];
+  const headers = { 'Authorization': `Bearer ${sk}` };
+  const all: any[] = [];
+  let startingAfter: string | null = null;
+  for (let i = 0; i < 10; i++) {
+    const params = new URLSearchParams({
+      'created[gte]': String(fromTs),
+      'created[lte]': String(toTs),
+      'limit': '100',
+    });
+    if (startingAfter) params.set('starting_after', startingAfter);
+    const res = await fetch(`https://api.stripe.com/v1/checkout/sessions?${params}`, { headers });
+    if (!res.ok) break;
+    const json = await res.json();
+    const data: any[] = json.data || [];
+    all.push(...data);
+    if (!json.has_more || data.length === 0) break;
+    startingAfter = data[data.length - 1].id;
+  }
+  return all.filter((s: any) => s.mode === 'payment' && s.payment_status === 'paid');
+}
+
 export async function getMoneyKPIs(from: string, to: string) {
   const fromTs = Math.floor(new Date(from).getTime() / 1000);
   const toTs = Math.floor(new Date(to + 'T23:59:59Z').getTime() / 1000);
 
-  // Today window (in UTC — Railway default)
-  const today = new Date().toISOString().slice(0, 10);
-  const todayFromTs = Math.floor(new Date(today + 'T00:00:00Z').getTime() / 1000);
-  const todayToTs = Math.floor(new Date(today + 'T23:59:59Z').getTime() / 1000);
+  // "Today" window anchored to Europe/Rome. Using UTC would drop transactions
+  // that happen after local midnight but before UTC midnight (01:59 AM Rome =
+  // 23:59 UTC previous day).
+  const todayBoundsRes = await query(
+    `SELECT EXTRACT(EPOCH FROM (date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome'))::BIGINT as start_ts,
+            EXTRACT(EPOCH FROM ((date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome'))::BIGINT - 1 as end_ts`
+  );
+  const todayFromTs = Number(todayBoundsRes.rows[0]?.start_ts || 0);
+  const todayToTs = Number(todayBoundsRes.rows[0]?.end_ts || 0);
 
-  const [invoices, todayInvoices, topupsRange, todayTopupsRes, cancellationsRes, todayCancellationsRes, dailyCancellationsRes] = await Promise.all([
+  const [invoices, todayInvoices, topupSessions, todayTopupSessions, cancellationsRes, todayCancellationsRes, dailyCancellationsRes] = await Promise.all([
     fetchStripeInvoices(fromTs, toTs),
     fetchStripeInvoices(todayFromTs, todayToTs),
-    query(`SELECT DATE(created_at)::TEXT as day, COALESCE(SUM(amount),0)::INTEGER as total, COUNT(*)::INTEGER as count FROM credit_transactions WHERE type = 'topup' AND created_at >= $1 AND created_at <= $2::date + 1 GROUP BY day ORDER BY day`, [from, to]),
-    query(`SELECT COALESCE(SUM(amount),0)::INTEGER as total, COUNT(*)::INTEGER as count FROM credit_transactions WHERE type = 'topup' AND created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + 1`),
+    fetchStripeTopupSessions(fromTs, toTs),
+    fetchStripeTopupSessions(todayFromTs, todayToTs),
     query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= $1 AND updated_at <= $2::date + 1`, [from, to]),
-    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= CURRENT_DATE AND updated_at < CURRENT_DATE + 1`),
+    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= (date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome') AND updated_at < ((date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome')`),
     query(`SELECT DATE(updated_at)::TEXT as day, COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= $1 AND updated_at <= $2::date + 1 GROUP BY day ORDER BY day`, [from, to]),
   ]);
+
+  const sumSessions = (arr: any[]) => arr.reduce((s, x) => s + (x.amount_total || 0), 0) / 100;
 
   // Bucket invoices by billing_reason
   const bucket = (invs: any[]) => {
@@ -961,10 +994,10 @@ export async function getMoneyKPIs(from: string, to: string) {
   const rangeBuckets = bucket(invoices);
   const todayBuckets = bucket(todayInvoices);
 
-  // Today cash-in = today invoices total paid + today topups
-  const todayTopupCents = todayTopupsRes.rows[0]?.total || 0;
+  // Today cash-in = today invoices total paid + today topup sessions
+  const todayTopupAmount = sumSessions(todayTopupSessions);
   const todayInvoicesTotal = todayBuckets.new.amount + todayBuckets.renewal.amount + todayBuckets.update.amount + todayBuckets.other.amount;
-  const cashInToday = todayInvoicesTotal + todayTopupCents / 100;
+  const cashInToday = todayInvoicesTotal + todayTopupAmount;
 
   // Daily merge for chart
   const dayMap: Record<string, MoneyDailyRow> = {};
@@ -979,8 +1012,9 @@ export async function getMoneyKPIs(from: string, to: string) {
     if (inv.billing_reason === 'subscription_create') row.newSubs += amt;
     else if (inv.billing_reason === 'subscription_cycle') row.renewals += amt;
   }
-  for (const r of topupsRange.rows) {
-    ensureDay(r.day).topups += (r.total || 0) / 100;
+  for (const s of topupSessions) {
+    const day = new Date(s.created * 1000).toISOString().slice(0, 10);
+    ensureDay(day).topups += (s.amount_total || 0) / 100;
   }
   for (const r of dailyCancellationsRes.rows) {
     ensureDay(r.day).cancellations += r.count || 0;
@@ -988,8 +1022,8 @@ export async function getMoneyKPIs(from: string, to: string) {
   const daily = Object.values(dayMap).sort((a, b) => a.date.localeCompare(b.date));
 
   // Range totals
-  const rangeTopupAmount = topupsRange.rows.reduce((s: number, r: any) => s + (r.total || 0), 0) / 100;
-  const rangeTopupCount = topupsRange.rows.reduce((s: number, r: any) => s + (r.count || 0), 0);
+  const rangeTopupAmount = sumSessions(topupSessions);
+  const rangeTopupCount = topupSessions.length;
   const rangeCashIn = rangeBuckets.new.amount + rangeBuckets.renewal.amount + rangeBuckets.update.amount + rangeBuckets.other.amount + rangeTopupAmount;
 
   return {
@@ -997,7 +1031,7 @@ export async function getMoneyKPIs(from: string, to: string) {
       cashIn: cashInToday,
       newSubs: todayBuckets.new,
       renewals: todayBuckets.renewal,
-      topups: { count: todayTopupsRes.rows[0]?.count || 0, amount: todayTopupCents / 100 },
+      topups: { count: todayTopupSessions.length, amount: todayTopupAmount },
       cancellations: todayCancellationsRes.rows[0]?.count || 0,
     },
     range: {

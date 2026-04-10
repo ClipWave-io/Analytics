@@ -97,43 +97,58 @@ export default function OverviewPage() {
       {loading && !data ? <LoadingState /> : data && (
         <>
           {/* ══════════════════════════════════════════════════ */}
-          {/* ROW 1 — MONEY TODAY */}
+          {/* ROW 1a — MONEY TODAY (always today, small) */}
           {/* ══════════════════════════════════════════════════ */}
           <div className="flex items-center gap-2 mb-3 mt-2">
             <Banknote className="w-4 h-4 text-[#22c55e]" />
-            <h2 className="text-sm font-bold uppercase tracking-wider text-[#9b9bb0]">Money · Today</h2>
+            <h2 className="text-sm font-bold uppercase tracking-wider text-[#9b9bb0]">Today (live)</h2>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+            <CompactKPI label="Cash In" value={fmtMoney(data.money.today.cashIn)} color="#22c55e" />
+            <CompactKPI label="New Subs" value={String(data.money.today.newSubs.count)} color="#3388ff" />
+            <CompactKPI label="Renewals" value={String(data.money.today.renewals.count)} color="#8b5cf6" />
+            <CompactKPI label="Top-ups" value={String(data.money.today.topups.count)} color="#f59e0b" />
+            <CompactKPI label="Cancellations" value={String(data.money.today.cancellations)} color="#ef4444" />
+          </div>
+
+          {/* ══════════════════════════════════════════════════ */}
+          {/* ROW 1b — MONEY RANGE (follows date picker) */}
+          {/* ══════════════════════════════════════════════════ */}
+          <div className="flex items-center gap-2 mb-3">
+            <DollarSign className="w-4 h-4 text-[#3388ff]" />
+            <h2 className="text-sm font-bold uppercase tracking-wider text-[#9b9bb0]">Money · {range.label}</h2>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
             <KPICard
               title="Cash In"
-              value={fmtMoney(data.money.today.cashIn)}
+              value={fmtMoney(data.money.range.cashIn)}
               icon={<DollarSign className="w-5 h-5" />}
               color="#22c55e"
             />
             <KPICard
               title="New Subs"
-              value={data.money.today.newSubs.count}
-              suffix={data.money.today.newSubs.amount > 0 ? ` · ${fmtMoney(data.money.today.newSubs.amount)}` : ''}
+              value={data.money.range.newSubs.count}
+              suffix={data.money.range.newSubs.amount > 0 ? ` · ${fmtMoney(data.money.range.newSubs.amount)}` : ''}
               icon={<UserPlus className="w-5 h-5" />}
               color="#3388ff"
             />
             <KPICard
               title="Renewals"
-              value={data.money.today.renewals.count}
-              suffix={data.money.today.renewals.amount > 0 ? ` · ${fmtMoney(data.money.today.renewals.amount)}` : ''}
+              value={data.money.range.renewals.count}
+              suffix={data.money.range.renewals.amount > 0 ? ` · ${fmtMoney(data.money.range.renewals.amount)}` : ''}
               icon={<RefreshCw className="w-5 h-5" />}
               color="#8b5cf6"
             />
             <KPICard
               title="Top-ups"
-              value={data.money.today.topups.count}
-              suffix={data.money.today.topups.amount > 0 ? ` · ${fmtMoney(data.money.today.topups.amount)}` : ''}
+              value={data.money.range.topups.count}
+              suffix={data.money.range.topups.amount > 0 ? ` · ${fmtMoney(data.money.range.topups.amount)}` : ''}
               icon={<Coins className="w-5 h-5" />}
               color="#f59e0b"
             />
             <KPICard
               title="Cancellations"
-              value={data.money.today.cancellations}
+              value={data.money.range.cancellations}
               icon={<UserMinus className="w-5 h-5" />}
               color="#ef4444"
             />
@@ -298,6 +313,18 @@ export default function OverviewPage() {
         </>
       )}
     </>
+  );
+}
+
+function CompactKPI({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div className="bg-[#0a0a1a] rounded-xl border border-white/[0.05] px-3 py-2.5 flex items-center justify-between gap-2">
+      <span className="flex items-center gap-2 text-[11px] text-[#9b9bb0] truncate">
+        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
+        {label}
+      </span>
+      <span className="text-sm font-bold tabular-nums">{value}</span>
+    </div>
   );
 }
 
