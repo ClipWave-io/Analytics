@@ -946,27 +946,30 @@ async function fetchStripeTopupSessions(fromTs: number, toTs: number): Promise<a
 }
 
 export async function getMoneyKPIs(from: string, to: string) {
-  const fromTs = Math.floor(new Date(from).getTime() / 1000);
-  const toTs = Math.floor(new Date(to + 'T23:59:59Z').getTime() / 1000);
-
-  // "Today" window anchored to Europe/Rome. Using UTC would drop transactions
-  // that happen after local midnight but before UTC midnight (01:59 AM Rome =
-  // 23:59 UTC previous day).
-  const todayBoundsRes = await query(
-    `SELECT EXTRACT(EPOCH FROM (date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome'))::BIGINT as start_ts,
-            EXTRACT(EPOCH FROM ((date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome'))::BIGINT - 1 as end_ts`
+  // Compute both range and today windows in Europe/Rome so everything is
+  // consistent. Interpreting "2026-04-10" as UTC midnight drops transactions
+  // that happen after local midnight but before UTC midnight.
+  const boundsRes = await query(
+    `SELECT
+       EXTRACT(EPOCH FROM (($1::timestamp) AT TIME ZONE 'Europe/Rome'))::BIGINT as range_from,
+       EXTRACT(EPOCH FROM (($2::timestamp + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome'))::BIGINT - 1 as range_to,
+       EXTRACT(EPOCH FROM (date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome'))::BIGINT as today_from,
+       EXTRACT(EPOCH FROM ((date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome'))::BIGINT - 1 as today_to`,
+    [from, to]
   );
-  const todayFromTs = Number(todayBoundsRes.rows[0]?.start_ts || 0);
-  const todayToTs = Number(todayBoundsRes.rows[0]?.end_ts || 0);
+  const fromTs = Number(boundsRes.rows[0]?.range_from || 0);
+  const toTs = Number(boundsRes.rows[0]?.range_to || 0);
+  const todayFromTs = Number(boundsRes.rows[0]?.today_from || 0);
+  const todayToTs = Number(boundsRes.rows[0]?.today_to || 0);
 
   const [invoices, todayInvoices, topupSessions, todayTopupSessions, cancellationsRes, todayCancellationsRes, dailyCancellationsRes] = await Promise.all([
     fetchStripeInvoices(fromTs, toTs),
     fetchStripeInvoices(todayFromTs, todayToTs),
     fetchStripeTopupSessions(fromTs, toTs),
     fetchStripeTopupSessions(todayFromTs, todayToTs),
-    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= $1 AND updated_at <= $2::date + 1`, [from, to]),
-    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= (date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome') AND updated_at < ((date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome')`),
-    query(`SELECT DATE(updated_at)::TEXT as day, COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= $1 AND updated_at <= $2::date + 1 GROUP BY day ORDER BY day`, [from, to]),
+    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= to_timestamp($1) AND updated_at <= to_timestamp($2)`, [fromTs, toTs]),
+    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= to_timestamp($1) AND updated_at <= to_timestamp($2)`, [todayFromTs, todayToTs]),
+    query(`SELECT DATE(updated_at AT TIME ZONE 'Europe/Rome')::TEXT as day, COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= to_timestamp($1) AND updated_at <= to_timestamp($2) GROUP BY day ORDER BY day`, [fromTs, toTs]),
   ]);
 
   const sumSessions = (arr: any[]) => arr.reduce((s, x) => s + (x.amount_total || 0), 0) / 100;
@@ -999,22 +1002,22 @@ export async function getMoneyKPIs(from: string, to: string) {
   const todayInvoicesTotal = todayBuckets.new.amount + todayBuckets.renewal.amount + todayBuckets.update.amount + todayBuckets.other.amount;
   const cashInToday = todayInvoicesTotal + todayTopupAmount;
 
-  // Daily merge for chart
+  // Daily merge for chart — bucket by Europe/Rome local day
+  const romeDayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const romeDay = (ts: number) => romeDayFmt.format(new Date(ts * 1000));
   const dayMap: Record<string, MoneyDailyRow> = {};
   const ensureDay = (day: string) => {
     if (!dayMap[day]) dayMap[day] = { date: day, newSubs: 0, renewals: 0, topups: 0, cancellations: 0 };
     return dayMap[day];
   };
   for (const inv of invoices) {
-    const day = new Date(inv.created * 1000).toISOString().slice(0, 10);
-    const row = ensureDay(day);
+    const row = ensureDay(romeDay(inv.created));
     const amt = (inv.amount_paid || 0) / 100;
     if (inv.billing_reason === 'subscription_create') row.newSubs += amt;
     else if (inv.billing_reason === 'subscription_cycle') row.renewals += amt;
   }
   for (const s of topupSessions) {
-    const day = new Date(s.created * 1000).toISOString().slice(0, 10);
-    ensureDay(day).topups += (s.amount_total || 0) / 100;
+    ensureDay(romeDay(s.created)).topups += (s.amount_total || 0) / 100;
   }
   for (const r of dailyCancellationsRes.rows) {
     ensureDay(r.day).cancellations += r.count || 0;
@@ -1050,6 +1053,30 @@ export async function getMoneyKPIs(from: string, to: string) {
 // ═══════════════════════════════════
 // OVERVIEW EXTRAS (command center)
 // ═══════════════════════════════════
+
+export async function getOverviewVisitors(from: string, to: string) {
+  const { batchGeolocate } = await import('./geo');
+  const res = await query(
+    `SELECT DISTINCT ON (ip) ip, COALESCE(NULLIF(source,''),'direct') as source, created_at::TEXT as visited_at
+     FROM analytics_events
+     WHERE event = 'link_click' AND ip IS NOT NULL
+       AND created_at >= $1 AND created_at <= $2::date + 1
+     ORDER BY ip, created_at DESC
+     LIMIT 500`,
+    [from, to]
+  );
+  const ips = res.rows.map((r: { ip: string }) => r.ip);
+  const geoMap = await batchGeolocate(ips);
+  return res.rows
+    .map((r: { ip: string; source: string; visited_at: string }) => ({
+      ip: r.ip,
+      source: r.source,
+      visited_at: r.visited_at,
+      country: geoMap.get(r.ip)?.country || 'Unknown',
+      countryCode: geoMap.get(r.ip)?.countryCode || 'XX',
+    }))
+    .sort((a, b) => b.visited_at.localeCompare(a.visited_at));
+}
 
 export async function getOverviewExtras(from: string, to: string) {
   const [

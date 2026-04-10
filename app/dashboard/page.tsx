@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 
 interface MoneyBucket { count: number; amount: number }
+interface VisitorRow { ip: string; source: string; visited_at: string; country: string; countryCode: string }
 interface OverviewData {
   totalUsers: number;
   newUsers: number;
@@ -55,6 +56,7 @@ interface OverviewData {
       topSources: Array<{ source: string; visitors: number }>;
     };
   };
+  visitors: VisitorRow[];
 }
 
 const fmtMoney = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -304,12 +306,53 @@ export default function OverviewPage() {
           </div>
 
           {/* Secondary: Events + Total Users */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
             <KPICard title="Total Users" value={data.totalUsers} icon={<Users className="w-5 h-5" />} color="#8b5cf6" />
             <KPICard title="Active (7d)" value={data.activeUsers7d} icon={<UserCheck className="w-5 h-5" />} color="#22c55e" />
             <KPICard title="Events" value={data.totalEvents} icon={<Eye className="w-5 h-5" />} color="#9b9bb0" />
             <KPICard title="Cancelled (range)" value={data.extras.cancelledInRange} icon={<UserMinus className="w-5 h-5" />} color="#ef4444" />
           </div>
+
+          {/* ══════════════════════════════════════════════════ */}
+          {/* UNIQUE VISITOR LOG (all sources) */}
+          {/* ══════════════════════════════════════════════════ */}
+          {data.visitors?.length > 0 && (
+            <div className="bg-[#0a0a1a] rounded-2xl border border-white/[0.06] p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <Eye className="w-4 h-4 text-[#3388ff]" />
+                  Unique Visitor Log
+                </h3>
+                <span className="text-xs text-[#9b9bb0]">{data.visitors.length.toLocaleString()} unique visitors · all sources</span>
+              </div>
+              <div className="max-h-[500px] overflow-y-auto rounded-xl">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-[#0a0a1a]">
+                    <tr className="text-[#9b9bb0] border-b border-white/[0.06]">
+                      <th className="text-left py-2 px-3 font-medium">Date</th>
+                      <th className="text-left py-2 px-3 font-medium">IP</th>
+                      <th className="text-left py-2 px-3 font-medium">Country</th>
+                      <th className="text-left py-2 px-3 font-medium">Source</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.visitors.map((v, i) => (
+                      <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
+                        <td className="py-2 px-3 text-[#9b9bb0]">{v.visited_at?.slice(0, 16).replace('T', ' ')}</td>
+                        <td className="py-2 px-3 font-mono">{v.ip}</td>
+                        <td className="py-2 px-3">{v.country}</td>
+                        <td className="py-2 px-3">
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#3388ff]/15 text-[#5ca8ff]">
+                            {v.source}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </>
       )}
     </>
