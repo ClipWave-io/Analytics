@@ -6,6 +6,7 @@ import {
   getSegmentsData, getFeedbackData, getDevicesData, getPagesData,
   getLTVData, getExpansionData, getVelocityData, getFeaturesData,
   getErrorsData, getUserJourney, getReturningData, getCheckoutData,
+  getMoneyKPIs, getOverviewExtras,
 } from '@/lib/queries';
 import { batchGeolocate } from '@/lib/geo';
 
@@ -19,8 +20,18 @@ export async function GET(request: Request, { params }: { params: Params }) {
 
   try {
     switch (section) {
-      case 'overview':
-        return NextResponse.json(await getOverviewKPIs(from, to));
+      case 'overview': {
+        const [kpis, money, extras] = await Promise.all([
+          getOverviewKPIs(from, to),
+          getMoneyKPIs(from, to),
+          getOverviewExtras(from, to),
+        ]);
+        return NextResponse.json({
+          ...kpis,
+          money,
+          extras: { ...extras, arr: kpis.mrr * 12 },
+        });
+      }
       case 'revenue':
         return NextResponse.json(await getRevenueData(from, to));
       case 'users':

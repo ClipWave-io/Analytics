@@ -11,11 +11,21 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const range = url.searchParams.get('range') || '30d';
+  const from = url.searchParams.get('from');
+  const to = url.searchParams.get('to');
   const partner = session.role === 'partner' ? session.username : (url.searchParams.get('partner') || 'gilam');
 
+  // Explicit from/to take precedence over range preset
   let dateFilter = '';
-  if (range === '7d') dateFilter = "AND created_at >= NOW() - INTERVAL '7 days'";
-  else if (range === '30d') dateFilter = "AND created_at >= NOW() - INTERVAL '30 days'";
+  const params: unknown[] = [];
+  if (from && to) {
+    params.push(from, to);
+    dateFilter = `AND created_at >= $2 AND created_at <= $3::date + 1`;
+  } else if (range === '7d') {
+    dateFilter = "AND created_at >= NOW() - INTERVAL '7 days'";
+  } else if (range === '30d') {
+    dateFilter = "AND created_at >= NOW() - INTERVAL '30 days'";
+  }
 
   const sourceMap: Record<string, string[]> = {
     gilam: ['gilam', 'AIResearchPlus'],
@@ -34,13 +44,13 @@ export async function GET(request: Request) {
       query(`
         SELECT COUNT(DISTINCT ip)::INTEGER as count FROM analytics_events
         WHERE source = ANY($1) AND event = 'link_click' AND ip IS NOT NULL ${dateFilter}
-      `, [sources]),
+      `, [sources, ...params]),
 
       // GPT prefill events
       query(`
         SELECT COUNT(*)::INTEGER as count FROM analytics_events
         WHERE source = ANY($1) AND event IN ('gpt_prefill', 'gpt_seedance_prefill') ${dateFilter}
-      `, [sources]),
+      `, [sources, ...params]),
 
       // Daily unique visitors
       query(`
@@ -48,7 +58,7 @@ export async function GET(request: Request) {
         FROM analytics_events
         WHERE source = ANY($1) AND event = 'link_click' AND ip IS NOT NULL ${dateFilter}
         GROUP BY day ORDER BY day
-      `, [sources]),
+      `, [sources, ...params]),
 
       // Daily GPT prefills
       query(`
@@ -56,7 +66,7 @@ export async function GET(request: Request) {
         FROM analytics_events
         WHERE source = ANY($1) AND event IN ('gpt_prefill', 'gpt_seedance_prefill') ${dateFilter}
         GROUP BY day ORDER BY day
-      `, [sources]),
+      `, [sources, ...params]),
 
       // Traffic by source (unique IPs from link_click, consistent with KPI)
       query(`
@@ -64,7 +74,7 @@ export async function GET(request: Request) {
         FROM analytics_events
         WHERE source = ANY($1) AND event = 'link_click' AND ip IS NOT NULL ${dateFilter}
         GROUP BY source ORDER BY unique_ips DESC
-      `, [sources]),
+      `, [sources, ...params]),
     ]);
 
     // First visit per unique IP
@@ -73,7 +83,7 @@ export async function GET(request: Request) {
       FROM analytics_events
       WHERE source = ANY($1) AND event = 'link_click' AND ip IS NOT NULL ${dateFilter}
       ORDER BY ip, created_at ASC
-    `, [sources]);
+    `, [sources, ...params]);
 
     // Geolocate IPs
     const ips = firstVisits.rows.map((r: any) => r.ip);

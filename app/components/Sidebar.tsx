@@ -9,16 +9,24 @@ import {
   TrendingUp, Megaphone, CreditCard, Radio, Globe, ShieldAlert,
   Grid3X3, Heart, BarChart3, ArrowUpDown, UserCheck, Gauge,
   Layers, AlertTriangle, UserSearch, MonitorSmartphone, FileText,
-  MessageSquare, Bell, Download, Menu, X, LogOut, Film
+  MessageSquare, Bell, Download, Menu, X, LogOut, Film, Handshake
 } from 'lucide-react';
 
 const NAV_SECTIONS = [
   {
-    label: 'CORE',
+    label: 'OVERVIEW',
     items: [
-      { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
+      { href: '/dashboard', label: 'Command Center', icon: LayoutDashboard },
+    ],
+  },
+  {
+    label: 'MONEY',
+    items: [
       { href: '/dashboard/revenue', label: 'Revenue & MRR', icon: DollarSign },
-      { href: '/dashboard/funnel', label: 'Conversion Funnel', icon: GitBranch },
+      { href: '/dashboard/checkout', label: 'Checkout Funnel', icon: CreditCard },
+      { href: '/dashboard/ltv', label: 'Customer LTV', icon: Heart },
+      { href: '/dashboard/expansion', label: 'Expansion Revenue', icon: ArrowUpDown },
+      { href: '/dashboard/costs', label: 'API Costs', icon: BarChart3 },
       { href: '/dashboard/credits', label: 'Credit Economics', icon: Coins },
     ],
   },
@@ -27,9 +35,9 @@ const NAV_SECTIONS = [
     items: [
       { href: '/dashboard/users', label: 'Users', icon: Users },
       { href: '/dashboard/acquisition', label: 'Acquisition', icon: Megaphone },
-      { href: '/dashboard/checkout', label: 'Checkout Funnel', icon: CreditCard },
-      { href: '/dashboard/cohorts', label: 'Cohort Analysis', icon: Grid3X3 },
+      { href: '/dashboard/funnel', label: 'Conversion Funnel', icon: GitBranch },
       { href: '/dashboard/segments', label: 'Customer Segments', icon: UserCheck },
+      { href: '/dashboard/geo', label: 'Geolocation', icon: Globe },
     ],
   },
   {
@@ -38,37 +46,35 @@ const NAV_SECTIONS = [
       { href: '/dashboard/usage', label: 'Product Usage', icon: Zap },
       { href: '/dashboard/features', label: 'Feature Adoption', icon: Layers },
       { href: '/dashboard/library', label: 'Library', icon: Film },
-      { href: '/dashboard/errors', label: 'Error Tracking', icon: AlertTriangle },
+      { href: '/dashboard/pages', label: 'Top Pages', icon: FileText },
+      { href: '/dashboard/devices', label: 'Devices', icon: MonitorSmartphone },
       { href: '/dashboard/velocity', label: 'Velocity Metrics', icon: Gauge },
+    ],
+  },
+  {
+    label: 'RETENTION',
+    items: [
+      { href: '/dashboard/churn', label: 'Churn Analysis', icon: TrendingUp },
+      { href: '/dashboard/cohorts', label: 'Cohort Analysis', icon: Grid3X3 },
+      { href: '/dashboard/returning', label: 'New vs Returning', icon: Users },
       { href: '/dashboard/journey', label: 'User Journey', icon: UserSearch },
     ],
   },
   {
-    label: 'FINANCIAL',
-    items: [
-      { href: '/dashboard/costs', label: 'API Costs', icon: BarChart3 },
-      { href: '/dashboard/ltv', label: 'Customer LTV', icon: Heart },
-      { href: '/dashboard/churn', label: 'Churn Analysis', icon: TrendingUp },
-      { href: '/dashboard/expansion', label: 'Expansion Revenue', icon: ArrowUpDown },
-    ],
-  },
-  {
-    label: 'MONITORING',
+    label: 'OPS',
     items: [
       { href: '/dashboard/live', label: 'Live View', icon: Radio },
-      { href: '/dashboard/geo', label: 'Geolocation', icon: Globe },
+      { href: '/dashboard/errors', label: 'Error Tracking', icon: AlertTriangle },
       { href: '/dashboard/abuse', label: 'Trial Abuse', icon: ShieldAlert },
       { href: '/dashboard/alerts', label: 'Alerts', icon: Bell },
+      { href: '/dashboard/feedback', label: 'Feedback', icon: MessageSquare },
+      { href: '/dashboard/reports', label: 'Reports & Export', icon: Download },
     ],
   },
   {
-    label: 'EXTRA',
+    label: 'PARTNERS',
     items: [
-      { href: '/dashboard/feedback', label: 'Feedback', icon: MessageSquare },
-      { href: '/dashboard/returning', label: 'New vs Returning', icon: Users },
-      { href: '/dashboard/devices', label: 'Devices', icon: MonitorSmartphone },
-      { href: '/dashboard/pages', label: 'Top Pages', icon: FileText },
-      { href: '/dashboard/reports', label: 'Reports & Export', icon: Download },
+      { href: '/dashboard/partners', label: 'Partners Hub', icon: Handshake },
     ],
   },
 ];

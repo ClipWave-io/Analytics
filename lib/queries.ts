@@ -885,3 +885,182 @@ export async function getCheckoutData(from: string, to: string) {
     recentSessions,
   };
 }
+
+// ═══════════════════════════════════
+// MONEY KPIs (Stripe invoices + DB cancellations)
+// ═══════════════════════════════════
+
+type InvoiceBucket = { count: number; amount: number };
+type MoneyDailyRow = { date: string; newSubs: number; renewals: number; topups: number; cancellations: number };
+
+async function fetchStripeInvoices(fromTs: number, toTs: number): Promise<any[]> {
+  const sk = process.env.STRIPE_SECRET_KEY;
+  if (!sk) return [];
+  const headers = { 'Authorization': `Bearer ${sk}` };
+  const all: any[] = [];
+  let startingAfter: string | null = null;
+  // Stripe hard-caps at ~100 per page; paginate up to 10 pages for safety.
+  for (let i = 0; i < 10; i++) {
+    const params = new URLSearchParams({
+      'created[gte]': String(fromTs),
+      'created[lte]': String(toTs),
+      'status': 'paid',
+      'limit': '100',
+    });
+    if (startingAfter) params.set('starting_after', startingAfter);
+    const res = await fetch(`https://api.stripe.com/v1/invoices?${params}`, { headers });
+    if (!res.ok) break;
+    const json = await res.json();
+    const data: any[] = json.data || [];
+    all.push(...data);
+    if (!json.has_more || data.length === 0) break;
+    startingAfter = data[data.length - 1].id;
+  }
+  return all;
+}
+
+export async function getMoneyKPIs(from: string, to: string) {
+  const fromTs = Math.floor(new Date(from).getTime() / 1000);
+  const toTs = Math.floor(new Date(to + 'T23:59:59Z').getTime() / 1000);
+
+  // Today window (in UTC — Railway default)
+  const today = new Date().toISOString().slice(0, 10);
+  const todayFromTs = Math.floor(new Date(today + 'T00:00:00Z').getTime() / 1000);
+  const todayToTs = Math.floor(new Date(today + 'T23:59:59Z').getTime() / 1000);
+
+  const [invoices, todayInvoices, topupsRange, todayTopupsRes, cancellationsRes, todayCancellationsRes, dailyCancellationsRes] = await Promise.all([
+    fetchStripeInvoices(fromTs, toTs),
+    fetchStripeInvoices(todayFromTs, todayToTs),
+    query(`SELECT DATE(created_at)::TEXT as day, COALESCE(SUM(amount),0)::INTEGER as total, COUNT(*)::INTEGER as count FROM credit_transactions WHERE type = 'topup' AND created_at >= $1 AND created_at <= $2::date + 1 GROUP BY day ORDER BY day`, [from, to]),
+    query(`SELECT COALESCE(SUM(amount),0)::INTEGER as total, COUNT(*)::INTEGER as count FROM credit_transactions WHERE type = 'topup' AND created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + 1`),
+    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= $1 AND updated_at <= $2::date + 1`, [from, to]),
+    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= CURRENT_DATE AND updated_at < CURRENT_DATE + 1`),
+    query(`SELECT DATE(updated_at)::TEXT as day, COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= $1 AND updated_at <= $2::date + 1 GROUP BY day ORDER BY day`, [from, to]),
+  ]);
+
+  // Bucket invoices by billing_reason
+  const bucket = (invs: any[]) => {
+    const buckets: Record<'new' | 'renewal' | 'update' | 'other', InvoiceBucket> = {
+      new: { count: 0, amount: 0 },
+      renewal: { count: 0, amount: 0 },
+      update: { count: 0, amount: 0 },
+      other: { count: 0, amount: 0 },
+    };
+    for (const inv of invs) {
+      const amt = (inv.amount_paid || 0) / 100;
+      const key = inv.billing_reason === 'subscription_create' ? 'new'
+        : inv.billing_reason === 'subscription_cycle' ? 'renewal'
+        : inv.billing_reason === 'subscription_update' ? 'update'
+        : 'other';
+      buckets[key].count += 1;
+      buckets[key].amount += amt;
+    }
+    return buckets;
+  };
+
+  const rangeBuckets = bucket(invoices);
+  const todayBuckets = bucket(todayInvoices);
+
+  // Today cash-in = today invoices total paid + today topups
+  const todayTopupCents = todayTopupsRes.rows[0]?.total || 0;
+  const todayInvoicesTotal = todayBuckets.new.amount + todayBuckets.renewal.amount + todayBuckets.update.amount + todayBuckets.other.amount;
+  const cashInToday = todayInvoicesTotal + todayTopupCents / 100;
+
+  // Daily merge for chart
+  const dayMap: Record<string, MoneyDailyRow> = {};
+  const ensureDay = (day: string) => {
+    if (!dayMap[day]) dayMap[day] = { date: day, newSubs: 0, renewals: 0, topups: 0, cancellations: 0 };
+    return dayMap[day];
+  };
+  for (const inv of invoices) {
+    const day = new Date(inv.created * 1000).toISOString().slice(0, 10);
+    const row = ensureDay(day);
+    const amt = (inv.amount_paid || 0) / 100;
+    if (inv.billing_reason === 'subscription_create') row.newSubs += amt;
+    else if (inv.billing_reason === 'subscription_cycle') row.renewals += amt;
+  }
+  for (const r of topupsRange.rows) {
+    ensureDay(r.day).topups += (r.total || 0) / 100;
+  }
+  for (const r of dailyCancellationsRes.rows) {
+    ensureDay(r.day).cancellations += r.count || 0;
+  }
+  const daily = Object.values(dayMap).sort((a, b) => a.date.localeCompare(b.date));
+
+  // Range totals
+  const rangeTopupAmount = topupsRange.rows.reduce((s: number, r: any) => s + (r.total || 0), 0) / 100;
+  const rangeTopupCount = topupsRange.rows.reduce((s: number, r: any) => s + (r.count || 0), 0);
+  const rangeCashIn = rangeBuckets.new.amount + rangeBuckets.renewal.amount + rangeBuckets.update.amount + rangeBuckets.other.amount + rangeTopupAmount;
+
+  return {
+    today: {
+      cashIn: cashInToday,
+      newSubs: todayBuckets.new,
+      renewals: todayBuckets.renewal,
+      topups: { count: todayTopupsRes.rows[0]?.count || 0, amount: todayTopupCents / 100 },
+      cancellations: todayCancellationsRes.rows[0]?.count || 0,
+    },
+    range: {
+      cashIn: rangeCashIn,
+      newSubs: rangeBuckets.new,
+      renewals: rangeBuckets.renewal,
+      updates: rangeBuckets.update,
+      topups: { count: rangeTopupCount, amount: rangeTopupAmount },
+      cancellations: cancellationsRes.rows[0]?.count || 0,
+    },
+    daily,
+    stripeConfigured: !!process.env.STRIPE_SECRET_KEY,
+  };
+}
+
+// ═══════════════════════════════════
+// OVERVIEW EXTRAS (command center)
+// ═══════════════════════════════════
+
+export async function getOverviewExtras(from: string, to: string) {
+  const [
+    activeSubsRes,
+    cancelledInRange,
+    errorsRes,
+    creditsConsumedRes,
+    trafficVisitorsRes,
+    topSourcesRes,
+  ] = await Promise.all([
+    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'active' AND plan != 'free'`),
+    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= $1 AND updated_at <= $2::date + 1`, [from, to]),
+    query(`SELECT COUNT(*)::INTEGER as count FROM pipeline_runs WHERE status IN ('error','failed') AND created_at >= $1 AND created_at <= $2::date + 1`, [from, to]),
+    query(`SELECT COALESCE(SUM(ABS(amount)),0)::INTEGER as total FROM credit_transactions WHERE type IN ('video_breakdown','editor_transcribe','avatar_gen','avatar_gen_pro') AND created_at >= $1 AND created_at <= $2::date + 1`, [from, to]),
+    query(`SELECT COUNT(DISTINCT ip)::INTEGER as count FROM analytics_events WHERE event = 'link_click' AND ip IS NOT NULL AND created_at >= $1 AND created_at <= $2::date + 1`, [from, to]),
+    query(`SELECT COALESCE(NULLIF(source,''),'direct') as source, COUNT(DISTINCT ip)::INTEGER as visitors FROM analytics_events WHERE event = 'link_click' AND ip IS NOT NULL AND created_at >= $1 AND created_at <= $2::date + 1 GROUP BY 1 ORDER BY visitors DESC LIMIT 8`, [from, to]),
+  ]);
+
+  const activeSubs = activeSubsRes.rows[0]?.count || 0;
+  const cancelled = cancelledInRange.rows[0]?.count || 0;
+  // Rough churn rate: cancellations / (active + cancellations) in range
+  const churnRate = activeSubs + cancelled > 0 ? (cancelled / (activeSubs + cancelled)) * 100 : 0;
+
+  // LTV avg weighted by plan (same constants used in MRR calc, avg tenure ~6 months placeholder)
+  const planDist = await query(`SELECT plan, COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'active' AND plan != 'free' GROUP BY plan`);
+  const ltvByPlan: Record<string, number> = { starter: 16 * 6, pro: 42 * 6, agency: 109 * 6 };
+  let totalLtv = 0;
+  let totalSubs = 0;
+  for (const r of planDist.rows) {
+    const ltv = ltvByPlan[r.plan] || 0;
+    totalLtv += ltv * r.count;
+    totalSubs += r.count;
+  }
+  const avgLtv = totalSubs > 0 ? totalLtv / totalSubs : 0;
+
+  return {
+    arr: 0, // filled from mrr in the route
+    churnRate,
+    cancelledInRange: cancelled,
+    avgLtv,
+    errors: errorsRes.rows[0]?.count || 0,
+    creditsConsumed: creditsConsumedRes.rows[0]?.total || 0,
+    traffic: {
+      uniqueVisitors: trafficVisitorsRes.rows[0]?.count || 0,
+      topSources: topSourcesRes.rows,
+    },
+  };
+}
