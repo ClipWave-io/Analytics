@@ -27,10 +27,14 @@ export async function GET(request: Request, { params }: { params: Params }) {
           getOverviewExtras(from, to),
           getOverviewVisitors(from, to),
         ]);
+        // Compute churn rate using Stripe-sourced active count + cancelled count
+        const churnRate = kpis.activeSubscribers + extras.cancelledInRange > 0
+          ? (extras.cancelledInRange / (kpis.activeSubscribers + extras.cancelledInRange)) * 100
+          : 0;
         return NextResponse.json({
           ...kpis,
           money,
-          extras: { ...extras, arr: kpis.mrr * 12 },
+          extras: { ...extras, arr: kpis.mrr * 12, churnRate },
           visitors,
         });
       }

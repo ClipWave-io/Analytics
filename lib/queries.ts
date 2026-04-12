@@ -4,6 +4,55 @@ import { query } from './db';
 // OVERVIEW / KPIs
 // ═══════════════════════════════════
 
+// Fetch live subscription data from Stripe (source of truth).
+// The local DB subscriptions table is stale — it doesn't update when Stripe
+// changes status (trial→active, cancellation, payment failure, etc.).
+async function getStripeMRR(): Promise<{ mrr: number; activePaying: number; trialing: number; pastDue: number; cancelScheduled: number }> {
+  const sk = process.env.STRIPE_SECRET_KEY;
+  if (!sk) return { mrr: 0, activePaying: 0, trialing: 0, pastDue: 0, cancelScheduled: 0 };
+  const headers = { 'Authorization': `Bearer ${sk}` };
+
+  // Fetch active + trialing + past_due in parallel
+  const [activeRes, trialingRes, pastDueRes] = await Promise.all([
+    fetch('https://api.stripe.com/v1/subscriptions?status=active&limit=100&expand[]=data.items.data.price', { headers }),
+    fetch('https://api.stripe.com/v1/subscriptions?status=trialing&limit=100&expand[]=data.items.data.price', { headers }),
+    fetch('https://api.stripe.com/v1/subscriptions?status=past_due&limit=100&expand[]=data.items.data.price', { headers }),
+  ]);
+  const [activeData, trialingData, pastDueData] = await Promise.all([
+    activeRes.json(), trialingRes.json(), pastDueRes.json(),
+  ]);
+  const activeSubs: any[] = activeData.data || [];
+  const trialingSubs: any[] = trialingData.data || [];
+  const pastDueSubs: any[] = pastDueData.data || [];
+
+  let mrr = 0;
+  let activePaying = 0;
+  let cancelScheduled = 0;
+
+  for (const s of activeSubs) {
+    const price = s.items?.data?.[0]?.price;
+    const amount = price?.unit_amount ? price.unit_amount / 100 : 0;
+    const interval = price?.recurring?.interval;
+    const monthlyAmount = interval === 'year' ? amount / 12 : amount;
+    const trialEnded = !s.trial_end || s.trial_end * 1000 < Date.now();
+    if (s.cancel_at) {
+      cancelScheduled++;
+    }
+    if (trialEnded && !s.cancel_at) {
+      mrr += monthlyAmount;
+      activePaying++;
+    }
+  }
+
+  return {
+    mrr: Math.round(mrr * 100) / 100,
+    activePaying,
+    trialing: trialingSubs.length,
+    pastDue: pastDueSubs.length,
+    cancelScheduled,
+  };
+}
+
 export async function getOverviewKPIs(from: string, to: string) {
   const prevDays = Math.ceil((new Date(to).getTime() - new Date(from).getTime()) / 86400000);
   const prevFrom = new Date(new Date(from).getTime() - prevDays * 86400000).toISOString().slice(0, 10);
@@ -14,8 +63,7 @@ export async function getOverviewKPIs(from: string, to: string) {
     newUsers,
     prevNewUsers,
     activeUsers7d,
-    activeSubs,
-    prevActiveSubs,
+    stripeMRR,
     totalRuns,
     prevTotalRuns,
     completedRuns,
@@ -25,16 +73,13 @@ export async function getOverviewKPIs(from: string, to: string) {
     query('SELECT COUNT(*)::INTEGER as count FROM users WHERE created_at >= $1 AND created_at <= $2::date + 1', [from, to]),
     query('SELECT COUNT(*)::INTEGER as count FROM users WHERE created_at >= $1 AND created_at <= $2::date + 1', [prevFrom, prevTo]),
     query(`SELECT COUNT(DISTINCT user_id)::INTEGER as count FROM run_ownership WHERE created_at >= NOW() - INTERVAL '7 days'`),
-    query(`SELECT COUNT(*)::INTEGER as count, COALESCE(SUM(CASE WHEN plan='starter' THEN 16 WHEN plan='pro' THEN 42 WHEN plan='agency' THEN 109 ELSE 0 END), 0)::INTEGER as mrr FROM subscriptions WHERE status = 'active' AND plan != 'free'`),
-    // Approximate previous MRR using subscription created_at — not perfect but useful
-    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'active' AND plan != 'free'`),
+    getStripeMRR(),
     query('SELECT COUNT(*)::INTEGER as count FROM run_ownership WHERE created_at >= $1 AND created_at <= $2::date + 1', [from, to]),
     query('SELECT COUNT(*)::INTEGER as count FROM run_ownership WHERE created_at >= $1 AND created_at <= $2::date + 1', [prevFrom, prevTo]),
     query(`SELECT COUNT(*)::INTEGER as count FROM run_ownership WHERE created_at >= $1 AND created_at <= $2::date + 1 AND status = 'completed'`, [from, to]),
     query('SELECT COUNT(*)::INTEGER as count FROM analytics_events WHERE created_at >= $1 AND created_at <= $2::date + 1', [from, to]),
   ]);
 
-  const mrr = activeSubs.rows[0]?.mrr || 0;
   const runsNow = totalRuns.rows[0]?.count || 0;
   const runsPrev = prevTotalRuns.rows[0]?.count || 0;
   const usersNow = newUsers.rows[0]?.count || 0;
@@ -45,8 +90,11 @@ export async function getOverviewKPIs(from: string, to: string) {
     newUsers: usersNow,
     newUsersChange: usersPrev > 0 ? ((usersNow - usersPrev) / usersPrev) * 100 : 0,
     activeUsers7d: activeUsers7d.rows[0]?.count || 0,
-    mrr,
-    activeSubscribers: activeSubs.rows[0]?.count || 0,
+    mrr: stripeMRR.mrr,
+    activeSubscribers: stripeMRR.activePaying,
+    trialing: stripeMRR.trialing,
+    pastDue: stripeMRR.pastDue,
+    cancelScheduled: stripeMRR.cancelScheduled,
     totalRuns: runsNow,
     totalRunsChange: runsPrev > 0 ? ((runsNow - runsPrev) / runsPrev) * 100 : 0,
     completedRuns: completedRuns.rows[0]?.count || 0,
@@ -1092,6 +1140,22 @@ export async function getOverviewVisitors(from: string, to: string) {
     .sort((a, b) => b.visited_at.localeCompare(a.visited_at));
 }
 
+async function fetchStripeCanceledInRange(fromTs: number, toTs: number): Promise<number> {
+  const sk = process.env.STRIPE_SECRET_KEY;
+  if (!sk) return 0;
+  const headers = { 'Authorization': `Bearer ${sk}` };
+  const params = new URLSearchParams({
+    status: 'canceled',
+    'created[gte]': String(fromTs),
+    'created[lte]': String(toTs),
+    limit: '100',
+  });
+  const res = await fetch(`https://api.stripe.com/v1/subscriptions?${params}`, { headers });
+  if (!res.ok) return 0;
+  const json = await res.json();
+  return (json.data || []).length;
+}
+
 async function fetchStripeSessions(fromTs: number, toTs: number): Promise<any[]> {
   const sk = process.env.STRIPE_SECRET_KEY;
   if (!sk) return [];
@@ -1127,8 +1191,7 @@ export async function getOverviewExtras(from: string, to: string) {
   const toTs = Number(boundsRes.rows[0]?.t || 0);
 
   const [
-    activeSubsRes,
-    cancelledInRange,
+    cancelledCount,
     errorsRes,
     creditsConsumedRes,
     visitorsRes,
@@ -1137,8 +1200,8 @@ export async function getOverviewExtras(from: string, to: string) {
     newUsersRes,
     checkoutSessions,
   ] = await Promise.all([
-    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'active' AND plan != 'free'`),
-    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= to_timestamp($1) AND updated_at <= to_timestamp($2)`, [fromTs, toTs]),
+    // cancelledInRange uses Stripe canceled subs
+    fetchStripeCanceledInRange(fromTs, toTs),
     query(`SELECT COUNT(*)::INTEGER as count FROM run_ownership WHERE status IN ('failed','stopped') AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
     query(`SELECT COALESCE(SUM(ABS(amount)),0)::INTEGER as total FROM credit_transactions WHERE type IN ('video_breakdown','editor_transcribe','avatar_gen','avatar_gen_pro','pipeline_run') AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
     query(`SELECT COUNT(DISTINCT ip)::INTEGER as count FROM analytics_events WHERE event IN ('link_click','page_visit') AND ip IS NOT NULL AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
@@ -1148,10 +1211,8 @@ export async function getOverviewExtras(from: string, to: string) {
     fetchStripeSessions(fromTs, toTs),
   ]);
 
-  const activeSubs = activeSubsRes.rows[0]?.count || 0;
-  const cancelled = cancelledInRange.rows[0]?.count || 0;
-  // Rough churn rate: cancellations / (active + cancellations) in range
-  const churnRate = activeSubs + cancelled > 0 ? (cancelled / (activeSubs + cancelled)) * 100 : 0;
+  const cancelled = cancelledCount;
+  // Churn rate will be computed in the route using Stripe activePaying from getStripeMRR
 
   // Acquisition funnel
   const totalVisitors = visitorsRes.rows[0]?.count || 0;
@@ -1180,7 +1241,7 @@ export async function getOverviewExtras(from: string, to: string) {
 
   return {
     arr: 0, // filled from mrr in the route
-    churnRate,
+    churnRate: 0, // computed in the route using Stripe active count
     cancelledInRange: cancelled,
     avgLtv,
     errors: errorsRes.rows[0]?.count || 0,
