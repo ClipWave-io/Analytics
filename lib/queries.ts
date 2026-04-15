@@ -1091,6 +1091,9 @@ export async function getMoneyKPIs(from: string, to: string) {
   const rangeTopupCount = topupSessions.length;
   const rangeCashIn = rangeBuckets.new.amount + rangeBuckets.renewal.amount + rangeBuckets.update.amount + rangeBuckets.other.amount + rangeTopupAmount;
 
+  // Unique paying customers (for LTV calculation)
+  const uniqueCustomers = new Set(invoices.map((inv: any) => inv.customer)).size;
+
   return {
     today: {
       cashIn: cashInToday,
@@ -1101,6 +1104,7 @@ export async function getMoneyKPIs(from: string, to: string) {
     },
     range: {
       cashIn: rangeCashIn,
+      uniqueCustomers,
       newSubs: rangeBuckets.new,
       renewals: rangeBuckets.renewal,
       updates: rangeBuckets.update,
@@ -1144,16 +1148,25 @@ async function fetchStripeCanceledInRange(fromTs: number, toTs: number): Promise
   const sk = process.env.STRIPE_SECRET_KEY;
   if (!sk) return 0;
   const headers = { 'Authorization': `Bearer ${sk}` };
-  const params = new URLSearchParams({
-    status: 'canceled',
-    'created[gte]': String(fromTs),
-    'created[lte]': String(toTs),
-    limit: '100',
-  });
-  const res = await fetch(`https://api.stripe.com/v1/subscriptions?${params}`, { headers });
-  if (!res.ok) return 0;
-  const json = await res.json();
-  return (json.data || []).length;
+  // Fetch all canceled subs (no created filter) — Stripe has no canceled_at filter,
+  // so we fetch all and filter client-side by the actual cancellation timestamp.
+  let count = 0;
+  let startingAfter: string | null = null;
+  for (let i = 0; i < 10; i++) {
+    const params = new URLSearchParams({ status: 'canceled', limit: '100' });
+    if (startingAfter) params.set('starting_after', startingAfter);
+    const res = await fetch(`https://api.stripe.com/v1/subscriptions?${params}`, { headers });
+    if (!res.ok) break;
+    const json = await res.json();
+    const data: any[] = json.data || [];
+    for (const sub of data) {
+      const canceledAt = sub.canceled_at || 0;
+      if (canceledAt >= fromTs && canceledAt <= toTs) count++;
+    }
+    if (!json.has_more || data.length === 0) break;
+    startingAfter = data[data.length - 1].id;
+  }
+  return count;
 }
 
 async function fetchStripeSessions(fromTs: number, toTs: number): Promise<any[]> {
@@ -1227,17 +1240,8 @@ export async function getOverviewExtras(from: string, to: string) {
   const signupRate = totalVisitors > 0 ? (newUsers / totalVisitors) * 100 : 0;
   const checkoutConversion = checkoutsStarted > 0 ? (checkoutsPaid / checkoutsStarted) * 100 : 0;
 
-  // LTV avg weighted by plan (same constants used in MRR calc, avg tenure ~6 months placeholder)
-  const planDist = await query(`SELECT plan, COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'active' AND plan != 'free' GROUP BY plan`);
-  const ltvByPlan: Record<string, number> = { starter: 16 * 6, pro: 42 * 6, agency: 109 * 6 };
-  let totalLtv = 0;
-  let totalSubs = 0;
-  for (const r of planDist.rows) {
-    const ltv = ltvByPlan[r.plan] || 0;
-    totalLtv += ltv * r.count;
-    totalSubs += r.count;
-  }
-  const avgLtv = totalSubs > 0 ? totalLtv / totalSubs : 0;
+  // LTV is computed in the route from actual Stripe invoice revenue / unique customers
+  const avgLtv = 0;
 
   return {
     arr: 0, // filled from mrr in the route

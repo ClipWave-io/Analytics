@@ -27,14 +27,19 @@ export async function GET(request: Request, { params }: { params: Params }) {
           getOverviewExtras(from, to),
           getOverviewVisitors(from, to),
         ]);
-        // Compute churn rate using Stripe-sourced active count + cancelled count
-        const churnRate = kpis.activeSubscribers + extras.cancelledInRange > 0
-          ? (extras.cancelledInRange / (kpis.activeSubscribers + extras.cancelledInRange)) * 100
+        // Churn = cancelled in range / total subscriber base (active + pastDue + cancelled)
+        const totalBase = kpis.activeSubscribers + kpis.pastDue + extras.cancelledInRange;
+        const churnRate = totalBase > 0
+          ? (extras.cancelledInRange / totalBase) * 100
+          : 0;
+        // LTV = actual total revenue / unique paying customers (from Stripe invoices)
+        const avgLtv = money.range.uniqueCustomers > 0
+          ? money.range.cashIn / money.range.uniqueCustomers
           : 0;
         return NextResponse.json({
           ...kpis,
           money,
-          extras: { ...extras, arr: kpis.mrr * 12, churnRate },
+          extras: { ...extras, arr: kpis.mrr * 12, churnRate, avgLtv },
           visitors,
         });
       }

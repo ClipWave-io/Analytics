@@ -213,7 +213,7 @@ export default function OverviewPage() {
             <Zap className="w-4 h-4 text-[#f59e0b]" />
             <h2 className="text-sm font-bold uppercase tracking-wider text-[#9b9bb0]">Growth &amp; Product · Range</h2>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-8">
             <KPICard
               title="New Users"
               value={data.newUsers}
@@ -231,6 +231,7 @@ export default function OverviewPage() {
               color="#22c55e"
             />
             <KPICard title="Completed" value={data.completedRuns} icon={<Activity className="w-5 h-5" />} color="#8b5cf6" />
+            <KPICard title="In Progress" value={data.totalRuns - data.completedRuns - data.extras.errors} icon={<RefreshCw className="w-5 h-5" />} color="#06b6d4" />
             <KPICard title="Errors" value={data.extras.errors} icon={<AlertTriangle className="w-5 h-5" />} color={data.extras.errors > 0 ? '#ef4444' : '#9b9bb0'} />
             <KPICard title="Credits Used" value={data.extras.creditsConsumed} icon={<Coins className="w-5 h-5" />} color="#f59e0b" />
           </div>
