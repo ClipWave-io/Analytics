@@ -73,20 +73,30 @@ async function getStripeMRR(): Promise<{
     }
   }
 
-  // Trial metrics — classify subscriptions that had a trial (trial_end != null)
+  // Trial metrics — separate natural trial expiry (7 days) from voluntary early upgrades.
+  // Natural trial = trial lasted at least 6 days (trial period is 7 days).
+  // Voluntary upgrade = user called end-trial within minutes/hours → different flow entirely.
   const now = Date.now() / 1000;
+  const NATURAL_TRIAL_MIN = 6 * 86400; // 6 days in seconds
   const hadTrial = (s: any) => s.trial_end && s.trial_end < now;
-  const trialConverted = activeSubs.filter(s => hadTrial(s) && !s.cancel_at).length;
+  const isNaturalTrial = (s: any) => s.trial_end && s.created && (s.trial_end - s.created) >= NATURAL_TRIAL_MIN;
+
   // Failed upgrade = past_due where the unpaid invoice is a subscription_update (voluntary early upgrade)
-  // Real past due = past_due from natural renewal failure (subscription_cycle or other)
   const isFailedUpgrade = (s: any) => {
     const inv = s.latest_invoice;
     return inv && typeof inv === 'object' && inv.billing_reason === 'subscription_update';
   };
   const trialFailed = pastDueSubs.filter(s => isFailedUpgrade(s)).length;
-  const trialChurned = canceledSubs.filter(s => s.trial_end).length;
-  const trialFinished = trialConverted + trialFailed + trialChurned;
-  const trialRenewalRate = trialFinished > 0 ? (trialConverted / trialFinished) * 100 : 0;
+
+  // Trial Conv Rate counts ONLY natural trial expirations (7 days):
+  // - Converted: active subs whose trial ran its full course
+  // - Natural past due: past_due from subscription_cycle (not upgrade)
+  // - Natural churned: canceled subs whose trial ran its full course
+  const trialConvertedNatural = activeSubs.filter(s => hadTrial(s) && isNaturalTrial(s) && !s.cancel_at).length;
+  const trialPastDueNatural = pastDueSubs.filter(s => !isFailedUpgrade(s)).length;
+  const trialChurnedNatural = canceledSubs.filter(s => hadTrial(s) && isNaturalTrial(s)).length;
+  const naturalTrialFinished = trialConvertedNatural + trialPastDueNatural + trialChurnedNatural;
+  const trialRenewalRate = naturalTrialFinished > 0 ? (trialConvertedNatural / naturalTrialFinished) * 100 : 0;
 
   return {
     mrr: Math.round(mrr * 100) / 100,
@@ -94,7 +104,7 @@ async function getStripeMRR(): Promise<{
     trialing: trialingSubs.length,
     pastDue: pastDueSubs.length,
     cancelScheduled,
-    trialConverted,
+    trialConverted: trialConvertedNatural,
     trialFailed,
     trialRenewalRate: Math.round(trialRenewalRate * 10) / 10,
   };
