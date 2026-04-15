@@ -10,7 +10,7 @@ import {
 import {
   DollarSign, Users, Zap, Activity, UserCheck, TrendingUp, TrendingDown,
   Eye, RefreshCw, UserPlus, UserMinus, AlertTriangle, Coins, Globe, Banknote,
-  MousePointerClick, ShoppingCart, Target,
+  MousePointerClick, ShoppingCart, Target, ArrowUpDown,
 } from 'lucide-react';
 
 interface MoneyBucket { count: number; amount: number }
@@ -135,7 +135,7 @@ export default function OverviewPage() {
             <DollarSign className="w-4 h-4 text-[#3388ff]" />
             <h2 className="text-sm font-bold uppercase tracking-wider text-[#9b9bb0]">Money · {range.label}</h2>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-8">
             <KPICard
               title="Cash In"
               value={fmtMoney(data.money.range.cashIn)}
@@ -155,6 +155,13 @@ export default function OverviewPage() {
               suffix={data.money.range.renewals.amount > 0 ? ` · ${fmtMoney(data.money.range.renewals.amount)}` : ''}
               icon={<RefreshCw className="w-5 h-5" />}
               color="#8b5cf6"
+            />
+            <KPICard
+              title="Updates"
+              value={data.money.range.updates.count}
+              suffix={data.money.range.updates.amount > 0 ? ` · ${fmtMoney(data.money.range.updates.amount)}` : ''}
+              icon={<ArrowUpDown className="w-5 h-5" />}
+              color="#06b6d4"
             />
             <KPICard
               title="Top-ups"
