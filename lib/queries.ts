@@ -1,6 +1,28 @@
 import { query } from './db';
 
 // ═══════════════════════════════════
+// TEST EMAIL FILTER
+// ═══════════════════════════════════
+// Exclude internal test subscriptions/invoices from all metrics.
+// Pattern-based for Eli (ilaibachrach*), explicit list for known test emails.
+const TEST_EMAILS: string[] = [
+  'e3pofjojd@oqbhioew.com',
+  'qefoijfoew@oiqhwdoi.com',
+  'qwfjfioq@jqwbf.com',
+];
+function isTestEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const lower = email.toLowerCase();
+  if (lower.startsWith('ilaibachrach')) return true;
+  return TEST_EMAILS.includes(lower);
+}
+
+// Helper to get email from a Stripe subscription (needs expand[]=data.customer)
+function subEmail(s: any): string {
+  return (typeof s.customer === 'object' ? s.customer?.email : null) || '';
+}
+
+// ═══════════════════════════════════
 // OVERVIEW / KPIs
 // ═══════════════════════════════════
 
@@ -15,20 +37,21 @@ async function getStripeMRR(): Promise<{
   if (!sk) return { mrr: 0, activePaying: 0, trialing: 0, pastDue: 0, cancelScheduled: 0, trialConverted: 0, trialFailed: 0, trialRenewalRate: 0 };
   const headers = { 'Authorization': `Bearer ${sk}` };
 
-  // Fetch active + trialing + past_due + canceled in parallel
+  // Fetch active + trialing + past_due + canceled in parallel (expand customer for email filtering)
   const [activeRes, trialingRes, pastDueRes, canceledRes] = await Promise.all([
-    fetch('https://api.stripe.com/v1/subscriptions?status=active&limit=100&expand[]=data.items.data.price', { headers }),
-    fetch('https://api.stripe.com/v1/subscriptions?status=trialing&limit=100&expand[]=data.items.data.price', { headers }),
-    fetch('https://api.stripe.com/v1/subscriptions?status=past_due&limit=100&expand[]=data.items.data.price&expand[]=data.latest_invoice', { headers }),
-    fetch('https://api.stripe.com/v1/subscriptions?status=canceled&limit=100', { headers }),
+    fetch('https://api.stripe.com/v1/subscriptions?status=active&limit=100&expand[]=data.items.data.price&expand[]=data.customer', { headers }),
+    fetch('https://api.stripe.com/v1/subscriptions?status=trialing&limit=100&expand[]=data.customer', { headers }),
+    fetch('https://api.stripe.com/v1/subscriptions?status=past_due&limit=100&expand[]=data.items.data.price&expand[]=data.latest_invoice&expand[]=data.customer', { headers }),
+    fetch('https://api.stripe.com/v1/subscriptions?status=canceled&limit=100&expand[]=data.customer', { headers }),
   ]);
   const [activeData, trialingData, pastDueData, canceledData] = await Promise.all([
     activeRes.json(), trialingRes.json(), pastDueRes.json(), canceledRes.json(),
   ]);
-  const activeSubs: any[] = activeData.data || [];
-  const trialingSubs: any[] = trialingData.data || [];
-  const pastDueSubs: any[] = pastDueData.data || [];
-  const canceledSubs: any[] = canceledData.data || [];
+  // Filter out test subscriptions from all statuses
+  const activeSubs: any[] = (activeData.data || []).filter((s: any) => !isTestEmail(subEmail(s)));
+  const trialingSubs: any[] = (trialingData.data || []).filter((s: any) => !isTestEmail(subEmail(s)));
+  const pastDueSubs: any[] = (pastDueData.data || []).filter((s: any) => !isTestEmail(subEmail(s)));
+  const canceledSubs: any[] = (canceledData.data || []).filter((s: any) => !isTestEmail(subEmail(s)));
 
   let mrr = 0;
   let activePaying = 0;
@@ -999,7 +1022,7 @@ async function fetchStripeInvoices(fromTs: number, toTs: number): Promise<any[]>
     if (!res.ok) break;
     const json = await res.json();
     const data: any[] = json.data || [];
-    all.push(...data);
+    all.push(...data.filter((inv: any) => !isTestEmail(inv.customer_email)));
     if (!json.has_more || data.length === 0) break;
     startingAfter = data[data.length - 1].id;
   }
@@ -1177,16 +1200,18 @@ async function fetchStripeCanceledInRange(fromTs: number, toTs: number): Promise
   const headers = { 'Authorization': `Bearer ${sk}` };
   // Fetch all canceled subs (no created filter) — Stripe has no canceled_at filter,
   // so we fetch all and filter client-side by the actual cancellation timestamp.
+  // Also expand customer to filter out test emails.
   let count = 0;
   let startingAfter: string | null = null;
   for (let i = 0; i < 10; i++) {
-    const params = new URLSearchParams({ status: 'canceled', limit: '100' });
+    const params = new URLSearchParams({ status: 'canceled', limit: '100', 'expand[]': 'data.customer' });
     if (startingAfter) params.set('starting_after', startingAfter);
     const res = await fetch(`https://api.stripe.com/v1/subscriptions?${params}`, { headers });
     if (!res.ok) break;
     const json = await res.json();
     const data: any[] = json.data || [];
     for (const sub of data) {
+      if (isTestEmail(subEmail(sub))) continue;
       const canceledAt = sub.canceled_at || 0;
       if (canceledAt >= fromTs && canceledAt <= toTs) count++;
     }
@@ -1213,7 +1238,7 @@ async function fetchStripeSessions(fromTs: number, toTs: number): Promise<any[]>
     if (!res.ok) break;
     const json = await res.json();
     const data: any[] = json.data || [];
-    all.push(...data);
+    all.push(...data.filter((s: any) => !isTestEmail(s.customer_email)));
     if (!json.has_more || data.length === 0) break;
     startingAfter = data[data.length - 1].id;
   }
