@@ -19,7 +19,7 @@ async function getStripeMRR(): Promise<{
   const [activeRes, trialingRes, pastDueRes, canceledRes] = await Promise.all([
     fetch('https://api.stripe.com/v1/subscriptions?status=active&limit=100&expand[]=data.items.data.price', { headers }),
     fetch('https://api.stripe.com/v1/subscriptions?status=trialing&limit=100&expand[]=data.items.data.price', { headers }),
-    fetch('https://api.stripe.com/v1/subscriptions?status=past_due&limit=100&expand[]=data.items.data.price', { headers }),
+    fetch('https://api.stripe.com/v1/subscriptions?status=past_due&limit=100&expand[]=data.items.data.price&expand[]=data.latest_invoice', { headers }),
     fetch('https://api.stripe.com/v1/subscriptions?status=canceled&limit=100', { headers }),
   ]);
   const [activeData, trialingData, pastDueData, canceledData] = await Promise.all([
@@ -53,7 +53,13 @@ async function getStripeMRR(): Promise<{
   const now = Date.now() / 1000;
   const hadTrial = (s: any) => s.trial_end && s.trial_end < now;
   const trialConverted = activeSubs.filter(s => hadTrial(s) && !s.cancel_at).length;
-  const trialFailed = pastDueSubs.filter(s => hadTrial(s)).length;
+  // Failed upgrade = past_due where the unpaid invoice is a subscription_update (voluntary early upgrade)
+  // Real past due = past_due from natural renewal failure (subscription_cycle or other)
+  const isFailedUpgrade = (s: any) => {
+    const inv = s.latest_invoice;
+    return inv && typeof inv === 'object' && inv.billing_reason === 'subscription_update';
+  };
+  const trialFailed = pastDueSubs.filter(s => isFailedUpgrade(s)).length;
   const trialChurned = canceledSubs.filter(s => s.trial_end).length;
   const trialFinished = trialConverted + trialFailed + trialChurned;
   const trialRenewalRate = trialFinished > 0 ? (trialConverted / trialFinished) * 100 : 0;
