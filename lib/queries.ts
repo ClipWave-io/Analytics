@@ -9,6 +9,7 @@ const TEST_EMAILS: string[] = [
   'e3pofjojd@oqbhioew.com',
   'qefoijfoew@oiqhwdoi.com',
   'qwfjfioq@jqwbf.com',
+  'deandredart.business@gmail.com',
 ];
 function isTestEmail(email: string | null | undefined): boolean {
   if (!email) return false;
