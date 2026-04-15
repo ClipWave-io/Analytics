@@ -25,6 +25,9 @@ interface OverviewData {
   trialing: number;
   pastDue: number;
   cancelScheduled: number;
+  trialConverted: number;
+  trialFailed: number;
+  trialRenewalRate: number;
   totalRuns: number;
   totalRunsChange: number;
   completedRuns: number;
@@ -191,11 +194,18 @@ export default function OverviewPage() {
             <TrendingUp className="w-4 h-4 text-[#3388ff]" />
             <h2 className="text-sm font-bold uppercase tracking-wider text-[#9b9bb0]">Business Health</h2>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-9 gap-4 mb-8">
             <KPICard title="MRR" value={fmtMoney(data.mrr)} icon={<DollarSign className="w-5 h-5" />} color="#3388ff" />
             <KPICard title="ARR" value={fmtMoney(data.extras.arr)} icon={<TrendingUp className="w-5 h-5" />} color="#22c55e" />
             <KPICard title="Active Paying" value={data.activeSubscribers} icon={<UserCheck className="w-5 h-5" />} color="#8b5cf6" />
             <KPICard title="In Trial" value={data.trialing} icon={<Users className="w-5 h-5" />} color="#06b6d4" />
+            <KPICard
+              title="Trial Conv."
+              value={`${data.trialRenewalRate}%`}
+              icon={<Target className="w-5 h-5" />}
+              color={data.trialRenewalRate > 50 ? '#22c55e' : '#f59e0b'}
+            />
+            <KPICard title="Failed Upgrades" value={data.trialFailed} icon={<AlertTriangle className="w-5 h-5" />} color={data.trialFailed > 0 ? '#ef4444' : '#9b9bb0'} />
             <KPICard title="Past Due" value={data.pastDue} icon={<AlertTriangle className="w-5 h-5" />} color={data.pastDue > 0 ? '#ef4444' : '#9b9bb0'} />
             <KPICard
               title="Churn Rate"

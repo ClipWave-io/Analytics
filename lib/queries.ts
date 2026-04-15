@@ -7,23 +7,28 @@ import { query } from './db';
 // Fetch live subscription data from Stripe (source of truth).
 // The local DB subscriptions table is stale — it doesn't update when Stripe
 // changes status (trial→active, cancellation, payment failure, etc.).
-async function getStripeMRR(): Promise<{ mrr: number; activePaying: number; trialing: number; pastDue: number; cancelScheduled: number }> {
+async function getStripeMRR(): Promise<{
+  mrr: number; activePaying: number; trialing: number; pastDue: number; cancelScheduled: number;
+  trialConverted: number; trialFailed: number; trialRenewalRate: number;
+}> {
   const sk = process.env.STRIPE_SECRET_KEY;
-  if (!sk) return { mrr: 0, activePaying: 0, trialing: 0, pastDue: 0, cancelScheduled: 0 };
+  if (!sk) return { mrr: 0, activePaying: 0, trialing: 0, pastDue: 0, cancelScheduled: 0, trialConverted: 0, trialFailed: 0, trialRenewalRate: 0 };
   const headers = { 'Authorization': `Bearer ${sk}` };
 
-  // Fetch active + trialing + past_due in parallel
-  const [activeRes, trialingRes, pastDueRes] = await Promise.all([
+  // Fetch active + trialing + past_due + canceled in parallel
+  const [activeRes, trialingRes, pastDueRes, canceledRes] = await Promise.all([
     fetch('https://api.stripe.com/v1/subscriptions?status=active&limit=100&expand[]=data.items.data.price', { headers }),
     fetch('https://api.stripe.com/v1/subscriptions?status=trialing&limit=100&expand[]=data.items.data.price', { headers }),
     fetch('https://api.stripe.com/v1/subscriptions?status=past_due&limit=100&expand[]=data.items.data.price', { headers }),
+    fetch('https://api.stripe.com/v1/subscriptions?status=canceled&limit=100', { headers }),
   ]);
-  const [activeData, trialingData, pastDueData] = await Promise.all([
-    activeRes.json(), trialingRes.json(), pastDueRes.json(),
+  const [activeData, trialingData, pastDueData, canceledData] = await Promise.all([
+    activeRes.json(), trialingRes.json(), pastDueRes.json(), canceledRes.json(),
   ]);
   const activeSubs: any[] = activeData.data || [];
   const trialingSubs: any[] = trialingData.data || [];
   const pastDueSubs: any[] = pastDueData.data || [];
+  const canceledSubs: any[] = canceledData.data || [];
 
   let mrr = 0;
   let activePaying = 0;
@@ -44,12 +49,24 @@ async function getStripeMRR(): Promise<{ mrr: number; activePaying: number; tria
     }
   }
 
+  // Trial metrics — classify subscriptions that had a trial (trial_end != null)
+  const now = Date.now() / 1000;
+  const hadTrial = (s: any) => s.trial_end && s.trial_end < now;
+  const trialConverted = activeSubs.filter(s => hadTrial(s) && !s.cancel_at).length;
+  const trialFailed = pastDueSubs.filter(s => hadTrial(s)).length;
+  const trialChurned = canceledSubs.filter(s => s.trial_end).length;
+  const trialFinished = trialConverted + trialFailed + trialChurned;
+  const trialRenewalRate = trialFinished > 0 ? (trialConverted / trialFinished) * 100 : 0;
+
   return {
     mrr: Math.round(mrr * 100) / 100,
     activePaying,
     trialing: trialingSubs.length,
     pastDue: pastDueSubs.length,
     cancelScheduled,
+    trialConverted,
+    trialFailed,
+    trialRenewalRate: Math.round(trialRenewalRate * 10) / 10,
   };
 }
 
