@@ -206,7 +206,7 @@ export default function OverviewPage() {
               color={data.trialRenewalRate > 50 ? '#22c55e' : '#f59e0b'}
             />
             <KPICard title="Failed Upgrades" value={data.trialFailed} icon={<AlertTriangle className="w-5 h-5" />} color={data.trialFailed > 0 ? '#ef4444' : '#9b9bb0'} />
-            <KPICard title="Past Due" value={data.pastDue} icon={<AlertTriangle className="w-5 h-5" />} color={data.pastDue > 0 ? '#ef4444' : '#9b9bb0'} />
+            <KPICard title="Past Due" value={data.pastDue - data.trialFailed} icon={<AlertTriangle className="w-5 h-5" />} color={data.pastDue - data.trialFailed > 0 ? '#ef4444' : '#9b9bb0'} />
             <KPICard
               title="Churn Rate"
               value={`${data.extras.churnRate.toFixed(1)}%`}
