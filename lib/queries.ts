@@ -1024,13 +1024,14 @@ export async function getMoneyKPIs(from: string, to: string) {
   const todayFromTs = Number(boundsRes.rows[0]?.today_from || 0);
   const todayToTs = Number(boundsRes.rows[0]?.today_to || 0);
 
-  const [invoices, todayInvoices, topupSessions, todayTopupSessions, cancellationsRes, todayCancellationsRes, dailyCancellationsRes] = await Promise.all([
+  const [invoices, todayInvoices, topupSessions, todayTopupSessions, cancellationsCount, todayCancellationsCount, dailyCancellationsRes] = await Promise.all([
     fetchStripeInvoices(fromTs, toTs),
     fetchStripeInvoices(todayFromTs, todayToTs),
     fetchStripeTopupSessions(fromTs, toTs),
     fetchStripeTopupSessions(todayFromTs, todayToTs),
-    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= to_timestamp($1) AND updated_at <= to_timestamp($2)`, [fromTs, toTs]),
-    query(`SELECT COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= to_timestamp($1) AND updated_at <= to_timestamp($2)`, [todayFromTs, todayToTs]),
+    // Use Stripe as source of truth for cancellations (DB is stale)
+    fetchStripeCanceledInRange(fromTs, toTs),
+    fetchStripeCanceledInRange(todayFromTs, todayToTs),
     query(`SELECT DATE(updated_at AT TIME ZONE 'Europe/Rome')::TEXT as day, COUNT(*)::INTEGER as count FROM subscriptions WHERE status = 'cancelled' AND updated_at >= to_timestamp($1) AND updated_at <= to_timestamp($2) GROUP BY day ORDER BY day`, [fromTs, toTs]),
   ]);
 
@@ -1100,7 +1101,7 @@ export async function getMoneyKPIs(from: string, to: string) {
       newSubs: todayBuckets.new,
       renewals: todayBuckets.renewal,
       topups: { count: todayTopupSessions.length, amount: todayTopupAmount },
-      cancellations: todayCancellationsRes.rows[0]?.count || 0,
+      cancellations: todayCancellationsCount,
     },
     range: {
       cashIn: rangeCashIn,
@@ -1109,7 +1110,7 @@ export async function getMoneyKPIs(from: string, to: string) {
       renewals: rangeBuckets.renewal,
       updates: rangeBuckets.update,
       topups: { count: rangeTopupCount, amount: rangeTopupAmount },
-      cancellations: cancellationsRes.rows[0]?.count || 0,
+      cancellations: cancellationsCount,
     },
     daily,
     stripeConfigured: !!process.env.STRIPE_SECRET_KEY,
