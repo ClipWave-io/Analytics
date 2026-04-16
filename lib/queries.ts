@@ -1021,9 +1021,12 @@ async function fetchStripeInvoices(fromTs: number, toTs: number): Promise<any[]>
   const headers = { 'Authorization': `Bearer ${sk}` };
   const all: any[] = [];
   let startingAfter: string | null = null;
+  // Buffer: fetch invoices created up to 30 days before range start,
+  // because subscription_update invoices may be created before they're paid.
+  const bufferTs = fromTs - 30 * 86400;
   for (let i = 0; i < 10; i++) {
     const params = new URLSearchParams({
-      'created[gte]': String(fromTs),
+      'created[gte]': String(bufferTs),
       'created[lte]': String(toTs),
       'status': 'paid',
       'limit': '100',
@@ -1033,7 +1036,13 @@ async function fetchStripeInvoices(fromTs: number, toTs: number): Promise<any[]>
     if (!res.ok) break;
     const json = await res.json();
     const data: any[] = json.data || [];
-    all.push(...data.filter((inv: any) => !isTestEmail(inv.customer_email)));
+    // Filter by paid_at within target range (not created date)
+    all.push(...data.filter((inv: any) => {
+      if (isTestEmail(inv.customer_email)) return false;
+      const paidAt = inv.status_transitions?.paid_at;
+      if (!paidAt) return false;
+      return paidAt >= fromTs && paidAt <= toTs;
+    }));
     if (!json.has_more || data.length === 0) break;
     startingAfter = data[data.length - 1].id;
   }
@@ -1134,7 +1143,8 @@ export async function getMoneyKPIs(from: string, to: string) {
     return dayMap[day];
   };
   for (const inv of invoices) {
-    const row = ensureDay(romeDay(inv.created));
+    const paidAt = inv.status_transitions?.paid_at || inv.created;
+    const row = ensureDay(romeDay(paidAt));
     const amt = (inv.amount_paid || 0) / 100;
     if (inv.billing_reason === 'subscription_create') row.newSubs += amt;
     else if (inv.billing_reason === 'subscription_cycle') row.renewals += amt;
@@ -1155,6 +1165,33 @@ export async function getMoneyKPIs(from: string, to: string) {
   // Unique paying customers (for LTV calculation)
   const uniqueCustomers = new Set(invoices.map((inv: any) => inv.customer)).size;
 
+  // Revenue by source attribution (join Stripe emails → users.source)
+  const invoiceEmails = invoices.map((inv: any) => (inv.customer_email || '').toLowerCase()).filter(Boolean);
+  const topupEmails = topupSessions.map((s: any) => (s.customer_details?.email || s.customer_email || '').toLowerCase()).filter(Boolean);
+  const allEmails = [...new Set([...invoiceEmails, ...topupEmails])];
+  let sourceMap: Record<string, string> = {};
+  if (allEmails.length > 0) {
+    const sourceRes = await query(
+      `SELECT LOWER(email) as email, COALESCE(NULLIF(source,''),'direct') as source FROM users WHERE LOWER(email) = ANY($1::text[])`,
+      [allEmails]
+    );
+    for (const row of sourceRes.rows as { email: string; source: string }[]) {
+      sourceMap[row.email] = row.source;
+    }
+  }
+  const srcBuckets: Record<string, { revenue: number; count: number }> = {};
+  const addToSource = (email: string, amount: number) => {
+    const src = sourceMap[email.toLowerCase()] || 'unknown';
+    if (!srcBuckets[src]) srcBuckets[src] = { revenue: 0, count: 0 };
+    srcBuckets[src].revenue += amount;
+    srcBuckets[src].count += 1;
+  };
+  for (const inv of invoices) addToSource(inv.customer_email || '', (inv.amount_paid || 0) / 100);
+  for (const s of topupSessions) addToSource(s.customer_details?.email || s.customer_email || '', (s.amount_total || 0) / 100);
+  const revenueBySource = Object.entries(srcBuckets)
+    .map(([source, d]) => ({ source, ...d }))
+    .sort((a, b) => b.revenue - a.revenue);
+
   return {
     today: {
       cashIn: cashInToday,
@@ -1171,6 +1208,7 @@ export async function getMoneyKPIs(from: string, to: string) {
       updates: rangeBuckets.update,
       topups: { count: rangeTopupCount, amount: rangeTopupAmount },
       cancellations: cancellationsCount,
+      revenueBySource,
     },
     daily,
     stripeConfigured: !!process.env.STRIPE_SECRET_KEY,

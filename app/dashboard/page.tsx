@@ -47,6 +47,7 @@ interface OverviewData {
       updates: MoneyBucket;
       topups: MoneyBucket;
       cancellations: number;
+      revenueBySource: Array<{ source: string; revenue: number; count: number }>;
     };
     daily: Array<{ date: string; newSubs: number; renewals: number; topups: number; cancellations: number }>;
     stripeConfigured: boolean;
@@ -347,8 +348,48 @@ export default function OverviewPage() {
               </div>
             </div>
 
+            {/* Revenue by Source */}
+            <div className="bg-[#0a0a1a] rounded-2xl border border-white/[0.06] p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <Target className="w-4 h-4 text-[#f59e0b]" />
+                  Revenue by Source
+                </h3>
+                <div className="text-right">
+                  <p className="text-xs text-[#9b9bb0]">Total attributed</p>
+                  <p className="text-xl font-bold text-[#f59e0b]">
+                    {fmtMoney((data.money.range.revenueBySource || []).reduce((s, x) => s + x.revenue, 0))}
+                  </p>
+                </div>
+              </div>
+              {(data.money.range.revenueBySource || []).length > 0 ? (
+                <div className="space-y-2.5">
+                  {data.money.range.revenueBySource.map((s) => {
+                    const max = Math.max(...data.money.range.revenueBySource.map((x) => x.revenue));
+                    return (
+                      <div key={s.source} className="flex items-center gap-3">
+                        <div className="w-20 text-xs font-medium truncate">{s.source}</div>
+                        <div className="flex-1 relative h-7 bg-white/[0.03] rounded-lg overflow-hidden">
+                          <div
+                            className="absolute inset-y-0 left-0 rounded-lg bg-[#f59e0b]/25"
+                            style={{ width: `${(s.revenue / max) * 100}%` }}
+                          />
+                          <div className="absolute inset-0 flex items-center justify-between px-3 text-[11px]">
+                            <span className="text-white font-semibold">{fmtMoney(s.revenue)}</span>
+                            <span className="text-[#9b9bb0]">{s.count} txn</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-sm text-[#9b9bb0] text-center py-8">No revenue data for this period</p>
+              )}
+            </div>
+
             {/* Traffic snapshot */}
-            <div className="bg-[#0a0a1a] rounded-2xl border border-white/[0.06] p-6 md:col-span-2">
+            <div className="bg-[#0a0a1a] rounded-2xl border border-white/[0.06] p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-sm font-semibold flex items-center gap-2">
                   <Globe className="w-4 h-4 text-[#3388ff]" />
