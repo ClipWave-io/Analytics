@@ -9,7 +9,8 @@ import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContai
 import { Megaphone } from 'lucide-react';
 
 const SOURCE_COLORS: Record<string, string> = {
-  organic: '#22c55e', gilam: '#f59e0b', gpt: '#8b5cf6', '': '#6b7280',
+  organic: '#22c55e', gilam: '#f59e0b', gpt: '#8b5cf6',
+  google: '#4285f4', facebook: '#1877f2', '': '#6b7280',
 };
 
 const CustomTooltip = ({ active, payload, label }: any) => {

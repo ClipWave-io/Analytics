@@ -416,6 +416,16 @@ export async function getCostsData(from: string, to: string) {
 // ═══════════════════════════════════
 
 export async function getAcquisitionData(from: string, to: string) {
+  // Derived source: Google Ads (gclid) and Facebook Ads (fbclid) are normalised
+  // alongside explicit `source` values like 'gilam' so they show up as first-class
+  // categories in the breakdowns below.
+  const SOURCE_EXPR = `
+    CASE
+      WHEN metadata->>'gclid' IS NOT NULL AND metadata->>'gclid' != '' THEN 'google'
+      WHEN metadata->>'fbclid' IS NOT NULL AND metadata->>'fbclid' != '' THEN 'facebook'
+      ELSE NULLIF(source, '')
+    END
+  `;
   const [dailyVisits, bySource, byDay, topReferrers] = await Promise.all([
     query(`
       SELECT DATE(created_at)::TEXT as day, COUNT(*)::INTEGER as count
@@ -424,14 +434,14 @@ export async function getAcquisitionData(from: string, to: string) {
       GROUP BY day ORDER BY day
     `, [from, to]),
     query(`
-      SELECT source, COUNT(*)::INTEGER as count
+      SELECT ${SOURCE_EXPR} as source, COUNT(*)::INTEGER as count
       FROM analytics_events WHERE created_at >= $1 AND created_at <= $2::date + 1
-      GROUP BY source ORDER BY count DESC
+      GROUP BY 1 ORDER BY count DESC
     `, [from, to]),
     query(`
-      SELECT DATE(created_at)::TEXT as day, source, COUNT(*)::INTEGER as count
+      SELECT DATE(created_at)::TEXT as day, ${SOURCE_EXPR} as source, COUNT(*)::INTEGER as count
       FROM analytics_events WHERE created_at >= $1 AND created_at <= $2::date + 1
-      GROUP BY day, source ORDER BY day
+      GROUP BY day, 2 ORDER BY day
     `, [from, to]),
     query(`
       SELECT metadata->>'referrer' as referrer, COUNT(*)::INTEGER as count
@@ -1320,7 +1330,7 @@ export async function getOverviewExtras(from: string, to: string) {
     query(`SELECT COALESCE(SUM(ABS(amount)),0)::INTEGER as total FROM credit_transactions WHERE type IN ('video_breakdown','editor_transcribe','avatar_gen','avatar_gen_pro','pipeline_run') AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
     query(`SELECT COUNT(DISTINCT ip)::INTEGER as count FROM analytics_events WHERE event IN ('link_click','page_visit') AND ip IS NOT NULL AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
     query(`SELECT COUNT(*)::INTEGER as count FROM analytics_events WHERE event IN ('link_click','page_visit','dashboard_visit') AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
-    query(`SELECT COALESCE(NULLIF(source,''),'direct') as source, COUNT(DISTINCT ip)::INTEGER as visitors FROM analytics_events WHERE event IN ('link_click','page_visit') AND ip IS NOT NULL AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2) GROUP BY 1 ORDER BY visitors DESC LIMIT 8`, [fromTs, toTs]),
+    query(`SELECT COALESCE(CASE WHEN metadata->>'gclid' IS NOT NULL AND metadata->>'gclid' != '' THEN 'google' WHEN metadata->>'fbclid' IS NOT NULL AND metadata->>'fbclid' != '' THEN 'facebook' ELSE NULLIF(source,'') END, 'direct') as source, COUNT(DISTINCT ip)::INTEGER as visitors FROM analytics_events WHERE event IN ('link_click','page_visit') AND ip IS NOT NULL AND created_at >= to_timestamp($1) AND created_at <= to_timestamp($2) GROUP BY 1 ORDER BY visitors DESC LIMIT 8`, [fromTs, toTs]),
     query(`SELECT COUNT(*)::INTEGER as count FROM users WHERE created_at >= to_timestamp($1) AND created_at <= to_timestamp($2)`, [fromTs, toTs]),
     fetchStripeSessions(fromTs, toTs),
   ]);
